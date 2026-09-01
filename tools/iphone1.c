@@ -2,6 +2,7 @@
 #include "bringup_os1.h"
 #include "bringup.h"
 #include "lzss.h"
+#include "snapshot.h"
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -152,12 +153,48 @@ static void dump_va(s5l8900_t *m, uint32_t va, unsigned words) {
 static void usage(void) {
     puts("iphone1 --board m68|n82 --kernel PATH --devicetree PATH [options]");
 }
+
+typedef enum {
+    INPUT_TOUCH,
+    INPUT_LIFT,
+    INPUT_BUTTON
+} input_kind_t;
+
+typedef struct {
+    uint64_t step;
+    input_kind_t kind;
+    unsigned phase;
+    unsigned button;
+    uint16_t x, y;
+    bool pressed;
+} input_event_t;
+
+static bool button_name(const char *name, unsigned *which) {
+    static const char *const names[] = {
+        "hold", "menu", "volup", "voldown", "ringerab"
+    };
+    for (unsigned i = 0; i < S5L_BUTTON_COUNT; i++)
+        if (!strcmp(name, names[i])) {
+            *which = i;
+            return true;
+        }
+    return false;
+}
+
+static int input_compare(const void *a, const void *b) {
+    const input_event_t *x = a, *y = b;
+    return x->step < y->step ? -1 : x->step != y->step;
+}
+
 int main(int argc,char **argv) {
     const char *board_name=NULL,*kp=NULL,*dp=NULL,*rp=NULL,*cmd=NULL,*serial=NULL,*shot=NULL;
     uint64_t steps=200000000ull; unsigned ram_mb=0,vd=0; bool fb=true,debug=false,trace=false;
     uint32_t break_pc=0; uint64_t trace_from=UINT64_MAX; unsigned trace_last=256;
     uint32_t dump[8]; unsigned dump_n=0;
-    const char *unmatch[16]; unsigned unmatch_n=0; uint64_t shot_every=0;
+    const char *unmatch[16]; unsigned unmatch_n=0; uint64_t shot_every=0; uint32_t mmio_watch=0;
+    const char *load_path = NULL, *save_path = NULL;
+    uint64_t save_step = UINT64_MAX;
+    input_event_t events[128]; unsigned event_n = 0;
     for (int i=1;i<argc;i++) {
         if (!strcmp(argv[i],"--board")&&i+1<argc) board_name=argv[++i];
         else if (!strcmp(argv[i],"--kernel")&&i+1<argc) kp=argv[++i];
@@ -173,6 +210,76 @@ int main(int argc,char **argv) {
         else if (!strcmp(argv[i],"--screenshot")&&i+1<argc) shot=argv[++i];
         else if (!strcmp(argv[i],"--shot-every")&&i+1<argc) shot_every=strtoull(argv[++i],NULL,0);
         else if (!strcmp(argv[i],"--trace-devices")) trace=true;
+        else if (!strcmp(argv[i],"--mmio-watch")&&i+1<argc) mmio_watch=(uint32_t)strtoul(argv[++i],NULL,0)&~0xfffu;
+        else if (!strcmp(argv[i],"--save-at")&&i+2<argc) {
+            save_step = strtoull(argv[++i], NULL, 0);
+            save_path = argv[++i];
+        }
+        else if (!strcmp(argv[i],"--load")&&i+1<argc) load_path=argv[++i];
+        else if (!strcmp(argv[i],"--at")&&i+2<argc) {
+            input_event_t e = { .step = strtoull(argv[++i], NULL, 0) };
+            const char *action = argv[++i];
+            if (event_n >= sizeof events / sizeof events[0]) {
+                fprintf(stderr, "too many --at events\n");
+                return 2;
+            }
+            if (!strcmp(action, "tap") && i + 2 < argc) {
+                e.kind = INPUT_TOUCH;
+                e.phase = MTZ2_PHASE_MAKE_TOUCH;
+                e.x = (uint16_t)strtoul(argv[++i], NULL, 0);
+                e.y = (uint16_t)strtoul(argv[++i], NULL, 0);
+                events[event_n++] = e;
+                if (event_n >= sizeof events / sizeof events[0]) {
+                    fprintf(stderr, "too many --at events\n");
+                    return 2;
+                }
+                e.step += 200000u;
+                e.kind = INPUT_LIFT;
+                events[event_n++] = e;
+            } else if (!strcmp(action, "touch") && i + 3 < argc) {
+                const char *phase = argv[++i];
+                e.kind = INPUT_TOUCH;
+                e.phase = !strcmp(phase, "down") ? MTZ2_PHASE_MAKE_TOUCH :
+                           !strcmp(phase, "move") ? MTZ2_PHASE_TOUCHING :
+                           !strcmp(phase, "up") ? MTZ2_PHASE_BREAK_TOUCH : 255u;
+                e.x = (uint16_t)strtoul(argv[++i], NULL, 0);
+                e.y = (uint16_t)strtoul(argv[++i], NULL, 0);
+                if (e.phase == 255u) {
+                    fprintf(stderr, "unknown touch phase: %s\n", phase);
+                    return 2;
+                }
+                events[event_n++] = e;
+            } else if (!strcmp(action, "button") && i + 3 < argc) {
+                const char *name = argv[++i], *state = argv[++i];
+                if (!button_name(name, &e.button) ||
+                    (strcmp(state, "down") && strcmp(state, "up"))) {
+                    fprintf(stderr, "invalid button action\n");
+                    return 2;
+                }
+                e.kind = INPUT_BUTTON;
+                e.pressed = !strcmp(state, "down");
+                events[event_n++] = e;
+            } else if (!strcmp(action, "press") && i + 1 < argc) {
+                const char *name = argv[++i];
+                if (!button_name(name, &e.button)) {
+                    fprintf(stderr, "unknown button: %s\n", name);
+                    return 2;
+                }
+                e.kind = INPUT_BUTTON;
+                e.pressed = true;
+                events[event_n++] = e;
+                if (event_n >= sizeof events / sizeof events[0]) {
+                    fprintf(stderr, "too many --at events\n");
+                    return 2;
+                }
+                e.step += 300000u;
+                e.pressed = false;
+                events[event_n++] = e;
+            } else {
+                usage();
+                return 2;
+            }
+        }
         else if (!strcmp(argv[i],"--verbose")) { }
         else if (!strcmp(argv[i],"--break-pc")&&i+1<argc) break_pc=(uint32_t)strtoul(argv[++i],NULL,0);
         else if (!strcmp(argv[i],"--watch-pc")&&i+1<argc&&g_watch_n<S5L_PRE_STEP_TARGET_MAX-1u)
@@ -203,7 +310,7 @@ int main(int argc,char **argv) {
         fprintf(stderr,"machine init failed (RAM may overlap a device window)\n");
         return 1;
     }
-    m.trace_devices=trace;
+    m.trace_devices=trace; m.mtz1.trace=trace; m.mmio_watch_page=mmio_watch;
     s5l_os1_request_t q={k.p,k.n,d.p,d.n,rd.p,rd.n,cmd,fb,vd,b->lcd_width,b->lcd_height,debug,
                          unmatch,unmatch_n};
     s5l_os1_result_t r;
@@ -219,8 +326,20 @@ int main(int argc,char **argv) {
            r.boot_args_pa,r.ramdisk_pa,r.ramdisk_va,r.ramdisk_size);
     printf("framebuffer_pa=0x%08x vram_bytes=0x%08x top_of_kernel_data_pa=0x%08x cmdline=\"%s\"\n",
            r.framebuffer_pa,r.vram_bytes,r.top_of_kernel_data_pa,r.cmdline);
+    if (load_path) {
+        snapshot_status_t ss = snapshot_load(&m, load_path);
+        if (ss != SNAP_OK) {
+            fprintf(stderr, "snapshot load failed: %s\n", snapshot_strerror(ss));
+            s5l8900_free(&m); free(k.p); free(d.p); free(rd.p);
+            return 1;
+        }
+        fprintf(stderr, "loaded snapshot %s at step %llu\n", load_path,
+                (unsigned long long)m.cpu.cycles);
+    }
+    qsort(events, event_n, sizeof events[0], input_compare);
     tap_t t={serial?fopen(serial,"wb"):NULL,&m,true}; s5l8900_set_uart0_host(&m,tap,&t);
-    arm_status_t st=ARM_OK; uint64_t total=0; uint32_t ring[32]={0}; unsigned ri=0, same=0;
+    arm_status_t st=ARM_OK; uint64_t total=m.cpu.cycles; uint32_t ring[32]={0}; unsigned ri=0, same=0;
+    unsigned next_event = 0; bool saved = false;
     uint32_t last_window=0; const char *reason="steps exhausted";
     if (g_watch_n) { g_watch_m=&m; g_break_pc=break_pc&~1u;
         if (g_break_pc) g_watch[g_watch_n++]=g_break_pc;
@@ -228,12 +347,52 @@ int main(int argc,char **argv) {
     else if (break_pc) { uint32_t tgt=break_pc&~1u;
         if (!s5l8900_set_pre_step_hook(&m,break_hook,NULL,&tgt,1)) fprintf(stderr,"break hook refused\n"); }
     while (total<steps) {
+        if (!saved && save_path && total >= save_step) {
+            snapshot_status_t ss = snapshot_save(&m, save_path);
+            if (ss != SNAP_OK) fprintf(stderr, "snapshot save failed: %s\n",
+                                       snapshot_strerror(ss));
+            else fprintf(stderr, "saved snapshot %s at step %llu\n", save_path,
+                         (unsigned long long)total);
+            saved = true;
+        }
         unsigned slice=(unsigned)((steps-total)>1000000ull?1000000ull:steps-total);
+        if (next_event < event_n && events[next_event].step <= total) {
+            input_event_t *e = &events[next_event++];
+            fprintf(stderr, "input step=%llu ", (unsigned long long)total);
+            if (e->kind == INPUT_TOUCH || e->kind == INPUT_LIFT) {
+                s5l_mt_contact_t c = { 1u, (uint8_t)e->phase, e->x, e->y,
+                                       255u, 8u, 8u };
+                bool ok = e->kind == INPUT_LIFT ?
+                          s5l8900_set_touch(&m, NULL, 0u) :
+                          s5l8900_set_touch(&m, &c, 1u);
+                fprintf(stderr, "%s %u %u -> %s\n",
+                        e->kind == INPUT_LIFT ? "touch up" : "touch",
+                        e->x, e->y, ok ? "accepted" : "rejected");
+            } else {
+                bool ok = s5l8900_set_button(&m, e->button, e->pressed);
+                fprintf(stderr, "button %u %s -> %s\n", e->button,
+                        e->pressed ? "down" : "up", ok ? "accepted" : "rejected");
+            }
+            continue;
+        }
+        uint64_t boundary = steps;
+        if (next_event < event_n && events[next_event].step < boundary)
+            boundary = events[next_event].step;
+        if (!saved && save_path && save_step < boundary) boundary = save_step;
+        if (boundary > total && boundary - total < slice) slice = (unsigned)(boundary - total);
         /* trace_from is in retired instructions (cpu.cycles), the unit the
          * EXEC/SWI logs report. */
         if (m.cpu.cycles>=trace_from) { slice=1; trace_record(&m); }
         else if (m.cpu.cycles+slice>trace_from) slice=(unsigned)(trace_from-m.cpu.cycles);
         unsigned n=s5l8900_run(&m,slice,&st); total+=n; ring[ri++%32]=m.cpu.r[15];
+        if (!saved && save_path && total >= save_step) {
+            snapshot_status_t ss = snapshot_save(&m, save_path);
+            if (ss != SNAP_OK) fprintf(stderr, "snapshot save failed: %s\n",
+                                       snapshot_strerror(ss));
+            else fprintf(stderr, "saved snapshot %s at step %llu\n", save_path,
+                         (unsigned long long)total);
+            saved = true;
+        }
         if (shot&&shot_every&&total/shot_every!=(total-n)/shot_every) {
             char p[512]; snprintf(p,sizeof p,"%s.%llu.ppm",shot,(unsigned long long)(total/shot_every));
             if (!save_ppm(p,&m)) printf("periodic screenshot %s: no active CLCD window\n",p);

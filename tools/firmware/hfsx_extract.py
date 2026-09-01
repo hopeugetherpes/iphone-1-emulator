@@ -116,6 +116,10 @@ def main():
     needle = (sys.argv[3] if listing else target)
     out_path = (sys.argv[3] if (not listing and not lsdir and
                                 len(sys.argv) > 3) else None)
+    # Optional 4th arg: parent CNID, to pick one of several same-named
+    # files (e.g. a framework's symlink vs. its Versions/A binary).
+    want_parent = (int(sys.argv[4]) if (not listing and not lsdir and
+                                        len(sys.argv) > 4) else None)
 
     node_index = first_leaf
     seen = 0
@@ -146,6 +150,8 @@ def main():
                     hits.append((own_id if own_id else parent, name, rtype))
                 continue
             if name == needle and rtype == 2:  # kHFSPlusFileRecord
+                if want_parent is not None and parent != want_parent:
+                    continue
                 fork = Fork(raw, data_off + 88)
                 sys.stderr.write(
                     "found '%s' parent=%d size=%d blocks=%d extents=%s\n"
