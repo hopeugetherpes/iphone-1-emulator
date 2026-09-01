@@ -198,10 +198,15 @@ SNAP_SIZE_GUARD(s5l_stub_t,        56,    "snap_stubs");
  * 125704 adds eight per-framebuffer target aggregates (8 x 40), likewise
  * host-only, so a short witness ring cannot hide which completed surface later
  * became the active CLCD scanout.
- * SNAPSHOT_VERSION and the bytes on disk therefore do not move. The size below
- * must be read from the compiler's emitted `.space`, not inferred from source
- * padding. */
-SNAP_SIZE_GUARD(s5l8900_t,         125728, "snap_mach");
+ * 125992 adds the third SPI controller's serialized state. This changes the
+ * snapshot payload, so SNAPSHOT_VERSION moves to 34.
+ *
+ * v35 adds the Z1 controller protocol state, pending frame and geometry after
+ * the existing machine touch state. Transaction receive bytes are transient:
+ * restore resumes between transactions, while the protocol and queued frame
+ * state remain serialized. */
+SNAP_SIZE_GUARD(s5l_mtz1_t,        1400,   "snap_mtz1");
+SNAP_SIZE_GUARD(s5l8900_t,         127368, "snap_mach");
 #endif
 
 /* ---------------------------------------------------------------- the IO --- */
@@ -644,6 +649,32 @@ static bool mtz2_state_valid(const s5l_mtz2_t *d) {
  * same numbers, and a restored machine whose surface size differed from the
  * one the guest already read would put every tap in the wrong place.
  */
+static void snap_mtz1(sn_io_t *io, s5l_mtz1_t *d) {
+    FB(d->present); FB(d->powered); FB(d->selected); FB(d->atn);
+    FB(d->firmware); FB(d->stage_b); FB(d->check_seen); FB(d->atn_pulse);
+    FB(d->raw_stream); FB(d->aspeed_stream); FB(d->transaction_overflow);
+    F8(d->operating_mode); F8(d->seq); F8(d->last_n);
+    F32(d->pkt_len); F32(d->rx_len); F16(d->last_checksum);
+    F32(d->b_checksum);
+    F64(d->octets); F64(d->aspeed_bytes); F64(d->bspeed_bytes);
+    F64(d->transactions); F64(d->mode_transitions); F64(d->checks);
+    F64(d->executes); F64(d->unknown_ops); F64(d->report_unknown);
+    F64(d->frames_queued); F64(d->frames_read);
+    F8(d->geom.family_id); F8(d->geom.endianness);
+    F8(d->geom.rows); F8(d->geom.columns); F16(d->geom.bcd_version);
+    F8(d->geom.buttons); F32(d->geom.surface_width);
+    F32(d->geom.surface_height);
+    FBYTES(d->pending, MTZ2_PAYLOAD_LIMIT); F8(d->pending_len);
+    FBYTES(d->last_contacts, sizeof d->last_contacts);
+    F8(d->frame_seq); F32(d->frame_ms);
+    if (sn_reading(io)) {
+        d->rx_len = 0u;
+        d->pkt_len = 0u;
+        d->transaction_overflow = false;
+        d->raw_stream = false;
+    }
+}
+
 static void snap_mtz2(sn_io_t *io, s5l_mtz2_t *d) {
     FB (d->in_reset); FB(d->hbpp_mode);
     /*
@@ -1075,6 +1106,7 @@ static void snap_mach(sn_io_t *io, s5l8900_t *m) {
      * SNAPSHOT_VERSION's v12 note for why this is a bump and not an append. */
     snap_buttons(io, &m->buttons);
     snap_mtz2(io, &m->mtz2);
+    snap_mtz1(io, &m->mtz1);
     snap_usbotg(io, &m->usbotg);
     /* The two DMA controllers. Appended after usbotg rather than placed beside
      * the I2S windows they feed, because MACH is a positional stream: putting
@@ -1347,32 +1379,57 @@ static bool snap_machine_valid(const s5l8900_t *m) {
     /* Slave callbacks are host wiring, not file bytes. Requiring the board's
      * exact wiring on both save and load makes that omission safe: a snapshot
      * can never be applied to a differently wired machine. */
-    if (m->i2c[0].slave_count != 2u ||
-        m->i2c[0].slaves[0].addr != PCF50635_I2C_ADDR ||
-        m->i2c[0].slaves[0].ctx != &m->pmu ||
-        m->i2c[0].slaves[1].addr != WM8991_I2C_ADDR ||
-        m->i2c[0].slaves[1].ctx != &m->codec ||
+    bool n82_wiring =
+        m->i2c[0].slave_count == 2u &&
+        m->i2c[0].slaves[0].addr == PCF50635_I2C_ADDR &&
+        m->i2c[0].slaves[0].ctx == &m->pmu &&
+        m->i2c[0].slaves[1].addr == WM8991_I2C_ADDR &&
+        m->i2c[0].slaves[1].ctx == &m->codec;
+    bool m68_wiring =
+        m->i2c[0].slave_count == 1u &&
+        m->i2c[0].slaves[0].addr == PCF50635_I2C_ADDR &&
+        m->i2c[0].slaves[0].ctx == &m->pmu;
+    if ((!n82_wiring && !m68_wiring) ||
         m->i2c[1].slave_count != 0u ||
         m->pmu.tick_hz != m->tb_hz)
         return false;
-    /* The SPI board wiring, for the same reason: spi0 chip select 1 carries the
-     * transport-only Merlot panel endpoint and spi1 chip select 0 carries the
-     * touch controller. Restoring a receive FIFO into a controller with no
-     * device behind it would resume a transfer that can never finish, and
-     * restoring the Z2's protocol position behind a DIFFERENT device would
-     * resume it into the wrong one. */
-    if (m->spi[0].slaves[S5L_SPI0_LCD_CS].transfer == NULL ||
-        m->spi[0].slaves[S5L_SPI0_LCD_CS].ctx != (void *)&m->spi[0])
-        return false;
-    for (unsigned cs = 0; cs < S5L_SPI_SLAVES; cs++)
-        if (cs != S5L_SPI0_LCD_CS &&
-            m->spi[0].slaves[cs].transfer != NULL) return false;
-    if (m->spi[1].slaves[0].transfer == NULL ||
-        m->spi[1].slaves[0].ctx != (void *)&m->mtz2 ||
-        (m->spi[1].cs & S5L_SPI_LCD_READ_PENDING) != 0u) return false;
-    for (unsigned cs = 1; cs < S5L_SPI_SLAVES; cs++)
-        if (m->spi[1].slaves[cs].transfer != NULL) return false;
-    if (!mtz2_state_valid(&m->mtz2)) return false;
+    /* The SPI board wiring, for the same reason. N82 has the transport-only
+     * Merlot panel on spi0 cs1 and Z2 on spi1 cs0. M68 has its Merlot panel on
+     * spi1 cs0 and Z1 on spi2 cs0. Restoring a receive FIFO into a controller
+     * with no device behind it would resume a transfer that can never finish,
+     * and restoring either touch protocol position behind a different device
+     * would resume it into the wrong one. */
+    m68_wiring = m68_wiring &&
+        m->spi[1].slaves[0].transfer != NULL &&
+        m->spi[1].slaves[0].ctx == (void *)&m->spi[1] &&
+        m->spi[2].slaves[0].transfer != NULL &&
+        m->spi[2].slaves[0].ctx == (void *)&m->mtz1;
+    if (!n82_wiring && !m68_wiring) return false;
+    if (n82_wiring) {
+        if (m->spi[0].slaves[S5L_SPI0_LCD_CS].transfer == NULL ||
+            m->spi[0].slaves[S5L_SPI0_LCD_CS].ctx != (void *)&m->spi[0])
+            return false;
+        for (unsigned cs = 0; cs < S5L_SPI_SLAVES; cs++)
+            if (cs != S5L_SPI0_LCD_CS &&
+                m->spi[0].slaves[cs].transfer != NULL) return false;
+        if (m->spi[1].slaves[0].transfer == NULL ||
+            m->spi[1].slaves[0].ctx != (void *)&m->mtz2 ||
+            (m->spi[1].cs & S5L_SPI_LCD_READ_PENDING) != 0u) return false;
+        for (unsigned cs = 1; cs < S5L_SPI_SLAVES; cs++)
+            if (m->spi[1].slaves[cs].transfer != NULL) return false;
+        if (!mtz2_state_valid(&m->mtz2)) return false;
+    } else {
+        if (m->spi[0].slaves[0].transfer != NULL ||
+            m->spi[0].slaves[S5L_SPI0_LCD_CS].transfer != NULL)
+            return false;
+        for (unsigned cs = 1; cs < S5L_SPI_SLAVES; cs++)
+            if (m->spi[0].slaves[cs].transfer != NULL) return false;
+        if ((m->spi[1].cs & S5L_SPI_LCD_READ_PENDING) != 0u)
+            return false;
+        for (unsigned cs = 1; cs < S5L_SPI_SLAVES; cs++)
+            if (m->spi[1].slaves[cs].transfer != NULL ||
+                m->spi[2].slaves[cs].transfer != NULL) return false;
+    }
     for (unsigned i = 0; i < m->nor.image_count; i++)
         if (m->nor.images[i].size < 20u ||
             (uint64_t)m->nor.images[i].offset + m->nor.images[i].size > m->nor.size)

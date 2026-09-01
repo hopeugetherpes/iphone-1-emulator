@@ -9,6 +9,7 @@
  * Copyright (c) 2026 j0shua-SYSON. MIT licensed.
  */
 #include "soc.h"
+#include <stdio.h>
 #include "board.h"
 #include "../arm/a64_static_engine.h"
 #include <stdlib.h>
@@ -52,6 +53,7 @@ static const s5l_window_t DEVICE_WINDOWS[] = {
     { S5L8900_I2S1_BASE,  S5L8900_DEV_SIZE,   "i2s1"  },
     { S5L8900_SPI0_BASE,  S5L8900_DEV_SIZE,   "spi0"  },
     { S5L8900_SPI1_BASE,  S5L8900_DEV_SIZE,   "spi1"  },
+    { S5L8900_SPI2_BASE,  S5L8900_DEV_SIZE,   "spi2"  },
     { S5L8900_USB_OTG_BASE, S5L8900_DEV_SIZE, "usb-otg" },
     { S5L8900_VIC0_BASE,  S5L8900_DEV_SIZE,   "vic0"  },
     { S5L8900_VIC1_BASE,  S5L8900_DEV_SIZE,   "vic1"  },
@@ -290,6 +292,10 @@ static void note_unmapped(s5l8900_t *m, uint32_t addr) {
 }
 
 static void note_device(s5l8900_t *m, uint32_t addr, uint32_t val, bool is_write) {
+    if (m->mmio_watch_page && (addr & ~0xfffu) == m->mmio_watch_page)
+        fprintf(stderr, "[mmio] %llu %c 0x%08x = 0x%08x pc=0x%08x\n",
+                (unsigned long long)m->cpu.cycles, is_write ? 'W' : 'R',
+                addr, val, m->cpu.r[15]);
     if (!m->trace_devices || m->dev_count >= S5L_DEVLOG) return;
     m->dev_addr[m->dev_count]     = addr;
     m->dev_value[m->dev_count]    = val;
@@ -418,6 +424,8 @@ static uint32_t bus_read(void *ctx, uint32_t addr, unsigned bytes) {
         v = s5l_spi_read(&m->spi[0], addr - S5L8900_SPI0_BASE);
     } else if (mmio_data(addr, bytes, S5L8900_SPI1_BASE, S5L8900_DEV_SIZE)) {
         v = s5l_spi_read(&m->spi[1], addr - S5L8900_SPI1_BASE);
+    } else if (mmio_data(addr, bytes, S5L8900_SPI2_BASE, S5L8900_DEV_SIZE)) {
+        v = s5l_spi_read(&m->spi[2], addr - S5L8900_SPI2_BASE);
     } else if (mmio_word(addr, bytes, S5L8900_USB_OTG_BASE, S5L8900_DEV_SIZE)) {
         /* Word accesses only, as for the VICs, the CLCD and the I2C
          * controllers. The driver uses 32-bit accessors throughout; a narrower
@@ -572,6 +580,11 @@ static void bus_write(void *ctx, uint32_t addr, uint32_t val, unsigned bytes) {
     if (mmio_data(addr, bytes, S5L8900_SPI1_BASE, S5L8900_DEV_SIZE)) {
         note_device(m, addr, val, true);
         s5l_spi_write(&m->spi[1], addr - S5L8900_SPI1_BASE, val);
+        return;
+    }
+    if (mmio_data(addr, bytes, S5L8900_SPI2_BASE, S5L8900_DEV_SIZE)) {
+        note_device(m, addr, val, true);
+        s5l_spi_write(&m->spi[2], addr - S5L8900_SPI2_BASE, val);
         return;
     }
     if (mmio_word(addr, bytes, S5L8900_USB_OTG_BASE, S5L8900_DEV_SIZE)) {
@@ -1291,14 +1304,14 @@ bool s5l8900_init_soc(s5l8900_t *m, uint32_t ram_base, uint32_t ram_size) {
      * unmapped access returns. See s5l_stub_t for why a stub is honest here and
      * where the line is that turns one into a real device model.
      *
-     * "Declared" is deliberately weaker than "harmless". The SPI trio below is
-     * on the current boot frontier: run23 proved that SpringBoard's first
-     * CoreTelephony request lands on a launchd-held service queue that
-     * CommCenter has never taken, and CommCenter's only IOKit subscription is
-     * to AppleBaseband, whose reset IOInterruptEventSource sits on GPIO
-     * interrupt 75 and has never fired. Storing spi2's registers does not fix
-     * that and is not claimed to; it stops one identified peripheral from
-     * answering the shipped driver with a fabricated zero.
+     * "Declared" is deliberately weaker than "harmless". SPI2 carries both
+     * M68's Z1 touch controller and the baseband transport
+     * com.apple.driver.BasebandSPI. The touch model is attached by the M68
+     * board; the baseband side remains only a controller endpoint. Its reset
+     * IOInterruptEventSource sits on GPIO interrupt 75, which has never fired.
+     * Modelling the window does not claim to complete either protocol; it stops
+     * identified peripherals from answering the shipped driver with a
+     * fabricated zero.
      *
      * A failure to declare one is not fatal but must not be silent, so the
      * result is folded into a counter the caller can see.
@@ -1315,12 +1328,6 @@ bool s5l8900_init_soc(s5l8900_t *m, uint32_t ram_base, uint32_t ram_size) {
              * (DEVICE_WINDOWS above) — a duplicate declaration would be
              * refused as an overlap and counted as a failure rather than
              * shadowing them. */
-            /* spi2, the baseband transport com.apple.driver.BasebandSPI
-             * configures and then reads back. spi0 and spi1 used to be here
-             * too; they are device models now (DEVICE_WINDOWS above), and a
-             * duplicate declaration here would be refused as an overlap and
-             * silently counted as a failure rather than shadowing them. */
-            { S5L8900_SPI2_BASE,   S5L8900_DEV_SIZE,   "spi2"      },
         };
         for (unsigned i = 0; i < sizeof STUBS / sizeof STUBS[0]; i++)
             if (!s5l8900_add_stub(m, STUBS[i].base, STUBS[i].size, STUBS[i].name))
@@ -1576,6 +1583,18 @@ bool s5l8900_set_button(s5l8900_t *m, unsigned which, bool pressed) {
     return s5l8900_wake_from_standby(m);
 }
 
+bool s5l8900_set_touch(s5l8900_t *m, const s5l_mt_contact_t *c,
+                       unsigned n) {
+    bool accepted;
+    if (!m) return false;
+    if (m->mtz1.present)
+        accepted = s5l_mtz1_set_contacts(&m->mtz1, c, n);
+    else
+        accepted = s5l_mtz2_set_contacts(&m->mtz2, c, n);
+    s5l8900_tick(m, 0u);
+    return accepted;
+}
+
 /* One implementation of the observable device work, kept out of the public
  * clock converter's common path. Besides avoiding duplication, this split
  * leaves s5l8900_tick() small enough for an optimizing compiler to inline its
@@ -1617,8 +1636,10 @@ static void s5l8900_refresh(s5l8900_t *m, uint32_t tb) {
      * observe both the assertion and the guest's W1C acknowledge. */
     s5l_spi_irq_note(&m->spi[0]);
     s5l_spi_irq_note(&m->spi[1]);
+    s5l_spi_irq_note(&m->spi[2]);
     s5l_vic_set_line(&m->vic[0], S5L8900_IRQ_SPI0, s5l_spi_irq(&m->spi[0]));
     s5l_vic_set_line(&m->vic[0], S5L8900_IRQ_SPI1, s5l_spi_irq(&m->spi[1]));
+    s5l_vic_set_line(&m->vic[0], S5L8900_IRQ_SPI2, s5l_spi_irq(&m->spi[2]));
 
     /*
      * uart4's receive FIFO — the ONLY interrupt in this machine whose source is
@@ -1679,6 +1700,9 @@ static void s5l8900_refresh(s5l8900_t *m, uint32_t tb) {
      * which nothing produces yet. */
     s5l_gpioic_set_line(&m->gpioic, S5L_GPIOIC_LINE_MULTITOUCH,
                         s5l_mtz2_irq(&m->mtz2));
+    if (m->mtz1.present)
+        s5l_gpioic_set_line(&m->gpioic, S5L_GPIOIC_LINE_MULTITOUCH_M68,
+                            s5l_mtz1_irq(&m->mtz1));
 
     /*
      * The five switches, refreshed for the same reason: the guest's own stores
@@ -1696,7 +1720,6 @@ static void s5l8900_refresh(s5l8900_t *m, uint32_t tb) {
         s5l_vic_set_line(&m->vic[line / 32u], line % 32u,
                          s5l_gpioic_group_irq(&m->gpioic, g));
     }
-
     /*
      * BOTH VICs drive the CPU.
      *

@@ -154,24 +154,19 @@
  * on a controller that is itself a VIC child. It is emphatically not VIC
  * vector 7, which on this SoC is the timer (S5L8900_IRQ_TIMER).
  *
- * spi0 and spi1 are now device models and their two VIC lines are defined and
- * wired (see the SPI section further down). spi2's is deliberately still not:
- * its interrupts are GPIO lines on a controller this machine models as storage,
- * so nothing could route them, and a constant that looks wired but is not is
- * the kind of landmine the GPIO base above was.
+ * The three controllers use consecutive direct VIC lines; spi2 is vector 11.
  *
- * spi2 therefore remains a declared window rather than a device model. It
- * exists so the traffic is named and stored rather than reading back as the
- * zero an unmapped access returns — run23 caught BasebandSPI writing a
- * configuration block to spi2 and later reading those same four registers back
- * to build a transfer descriptor, which an unmapped window answered with zeros.
+ * spi2 carries both the M68 Z1 touch controller and the baseband transport.
+ * The latter still has no protocol model, but routing the window through the
+ * controller lets each attached endpoint observe the traffic.
  */
 #define S5L8900_SPI0_BASE   0x3c300000u
 #define S5L8900_SPI1_BASE   0x3ce00000u
 #define S5L8900_SPI2_BASE   0x3d200000u
 #define S5L8900_IRQ_SPI0    9u
 #define S5L8900_IRQ_SPI1    10u
-#define S5L8900_SPI_COUNT   2u
+#define S5L8900_IRQ_SPI2    11u
+#define S5L8900_SPI_COUNT   3u
 
 /*
  * The Synopsys DesignWare USB 2.0 OTG (DWC2) controller. CONFIRMED from the
@@ -1303,6 +1298,8 @@ bool     s5l_mbx_irq(const s5l_mbx_t *m);
 /* Device-tree interrupt lines, as flat indices on this controller. */
 #define S5L_GPIOIC_LINE_PMU         85u
 #define S5L_GPIOIC_LINE_MULTITOUCH 155u
+/* M68 `/arm-io/spi2/multi-touch` declares `interrupts {0xa3, 0}`. */
+#define S5L_GPIOIC_LINE_MULTITOUCH_M68 163u
 
 /* Number of distinct unknown offsets remembered, as on I2C and SPI. */
 #define S5L_GPIOIC_UNKNOWN_OFF 8u
@@ -3415,6 +3412,22 @@ typedef struct {
     uint8_t  major, minor; /* contact ellipse axes, panel pixels        */
 } s5l_mt_contact_t;
 
+typedef struct {
+    uint8_t  family_id;
+    uint8_t  endianness;
+    uint8_t  rows;
+    uint8_t  columns;
+    uint16_t bcd_version;
+    uint8_t  buttons;
+    uint32_t surface_width;
+    uint32_t surface_height;
+} s5l_mt_geom_t;
+
+unsigned s5l_mt_report(const s5l_mt_geom_t *, uint8_t id, uint8_t *out);
+unsigned s5l_mt_frame_encode(const s5l_mt_geom_t *,
+                             const s5l_mt_contact_t *, unsigned n,
+                             uint8_t seq, uint32_t ms, uint8_t *out);
+
 /*
  * Queue one report. Returns FALSE — and queues nothing — when the device is in
  * no state to report, so a caller can never assume delivery:
@@ -3442,6 +3455,41 @@ bool     s5l_mtz2_set_contacts(s5l_mtz2_t *dev,
  */
 unsigned s5l_mtz2_encode(const s5l_mtz2_t *dev, const s5l_mt_contact_t *c,
                          unsigned n, uint8_t seq, uint32_t ms, uint8_t *out);
+
+/* ------------------------------------------- AppleMultitouchSPI's device ---
+ * M68's Z1 controller on /arm-io/spi2 chip select 0 (`function-spi_cs0`
+ * GPIO 0x0705, `function-power_ldo` GPIO 0x0804, attention on GPIOIC line
+ * 0xa3). See core/src/soc/mtz1.c. */
+#define MTZ1_PIN_SELECT 0x0705u
+#define MTZ1_PIN_POWER  0x0804u
+
+typedef struct {
+    bool     present, powered, selected, atn, trace;
+    bool     firmware, stage_b, check_seen, atn_pulse, raw_stream;
+    bool     aspeed_stream;
+    bool     transaction_overflow;
+    uint8_t  operating_mode, seq, last_n;
+    uint8_t  rx[1024];
+    uint32_t pkt_len, rx_len;
+    uint16_t last_checksum;
+    uint32_t b_checksum;
+    uint64_t octets, aspeed_bytes, bspeed_bytes;
+    uint64_t transactions, mode_transitions, checks, executes;
+    uint64_t unknown_ops, report_unknown, frames_queued, frames_read;
+    s5l_mt_geom_t geom;
+    uint8_t  pending[MTZ2_PAYLOAD_LIMIT];
+    uint8_t  pending_len;
+    s5l_mt_contact_t last_contacts[MTZ2_CONTACT_MAX];
+    uint8_t  frame_seq;
+    uint32_t frame_ms;
+} s5l_mtz1_t;
+
+void     s5l_mtz1_reset(s5l_mtz1_t *dev);
+void     s5l_mtz1_bind(s5l_mtz1_t *dev, s5l_spi_slave_t *slave);
+bool     s5l_mtz1_irq(const s5l_mtz1_t *dev);
+void     s5l_mtz1_select_pin(void *ctx, bool level);
+void     s5l_mtz1_power_pin(void *ctx, bool level);
+bool     s5l_mtz1_set_contacts(s5l_mtz1_t *, const s5l_mt_contact_t *, unsigned n);
 
 /* ------------------------------------ Synopsys DWC2 USB OTG (config only) ---
  * The four hardware-configuration registers AppleSynopsysOTGDevice reads out of
@@ -3917,9 +3965,8 @@ typedef struct {
      * i2s[1] is i2s1 (the baseband voice path). */
     s5l_wm8991_t codec;
     s5l_i2s_t   i2s[S5L8900_I2S_COUNT];
-    /* spi[0] is spi0 and spi[1] is spi1. spi2 is not here: it is the baseband
-     * transport on GPIO interrupts this machine cannot route, so it stays a
-     * declared stub window. */
+    /* spi[0] is spi0, spi[1] is spi1 and spi[2] is spi2. M68 attaches its Z1
+     * touch controller on spi2; the baseband transport also uses that bus. */
     s5l_spi_t   spi[S5L8900_SPI_COUNT];
     /* The two halves of /arm-io/gpio: the interrupt cascade on the power page
      * and the pin state on its own. See the GPIOIC section above. */
@@ -3929,6 +3976,7 @@ typedef struct {
      * Not a chip: see the buttons section above. */
     s5l_buttons_t buttons;
     s5l_mtz2_t   mtz2;      /* the touch controller on spi1 chip select 0 */
+    s5l_mtz1_t   mtz1;      /* M68: the Z1 touch controller on spi2 cs0    */
     s5l_usbotg_t usbotg;
     /* The two PL080 DMA controllers, /arm-io/dmac0 and /arm-io/dmac1. */
     s5l_pl080_t dmac[S5L8900_DMAC_COUNT];
@@ -3950,6 +3998,8 @@ typedef struct {
      * polls hardware to decide what to do next, so seeing exactly which
      * registers it reads is how we learn what it is waiting for. */
     bool       trace_devices;
+    /* Diagnostic: stream every access to this 4 KiB device page to stderr. */
+    uint32_t   mmio_watch_page;
     uint32_t   dev_addr[S5L_DEVLOG];
     uint32_t   dev_value[S5L_DEVLOG];
     bool       dev_is_write[S5L_DEVLOG];
@@ -4256,6 +4306,8 @@ bool s5l8900_wake_from_standby(s5l8900_t *m);
  * event cannot permanently block a later Power event in a FIFO.
  */
 bool s5l8900_set_button(s5l8900_t *m, unsigned which, bool pressed);
+bool s5l8900_set_touch(s5l8900_t *m, const s5l_mt_contact_t *c,
+                       unsigned n);
 
 /* ---------------------------------------------------------- wake sources ---
  *

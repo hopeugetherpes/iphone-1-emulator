@@ -198,7 +198,18 @@ uint16_t s5l_mtz2_sum16(const uint8_t *p, unsigned n) {
  * s5l_mtz2_reset().
  */
 unsigned s5l_mtz2_report(const s5l_mtz2_t *dev, uint8_t id, uint8_t *out) {
+    s5l_mt_geom_t geom;
     if (!dev || !out) return 0u;
+    geom.family_id = dev->family_id;
+    geom.endianness = dev->endianness;
+    geom.rows = dev->rows;
+    geom.columns = dev->columns;
+    geom.bcd_version = dev->bcd_version;
+    geom.buttons = dev->buttons;
+    geom.surface_width = dev->surface_width;
+    geom.surface_height = dev->surface_height;
+    return s5l_mt_report(&geom, id, out);
+#if 0
     memset(out, 0, MTZ2_REPORT_MAX);
     switch (id) {
         case MTZ2_REPORT_FAMILY_ID:
@@ -343,6 +354,7 @@ unsigned s5l_mtz2_report(const s5l_mtz2_t *dev, uint8_t id, uint8_t *out) {
              * unimplemented id, and the driver moves on. */
             return 0u;
     }
+#endif
 }
 
 /* ========================================================== packet framing === */
@@ -1348,6 +1360,11 @@ static int32_t mtz2_y_max(const s5l_mtz2_t *dev) {
     return mtz2_axis_max(dev->rows, 3600u, 7u);
 }
 
+static int32_t to_surface(uint32_t pixel, uint32_t span_pixels,
+                          int32_t lo, int32_t hi, bool flip);
+static void put16(uint8_t *p, uint16_t v);
+static void put32(uint8_t *p, uint32_t v);
+
 /*
  * A panel pixel placed inside [lo, hi], at the CENTRE of the pixel rather than
  * at its near corner — which is what stops a tap on pixel 0 from reading as
@@ -1395,6 +1412,23 @@ static void put32(uint8_t *p, uint32_t v) {
 
 unsigned s5l_mtz2_encode(const s5l_mtz2_t *dev, const s5l_mt_contact_t *c,
                          unsigned n, uint8_t seq, uint32_t ms, uint8_t *out) {
+    s5l_mt_geom_t geom;
+    if (!dev) return 0u;
+    (void)mtz2_x_max;
+    (void)mtz2_y_max;
+    (void)to_surface;
+    (void)put16;
+    (void)put32;
+    geom.family_id = dev->family_id;
+    geom.endianness = dev->endianness;
+    geom.rows = dev->rows;
+    geom.columns = dev->columns;
+    geom.bcd_version = dev->bcd_version;
+    geom.buttons = dev->buttons;
+    geom.surface_width = dev->surface_width;
+    geom.surface_height = dev->surface_height;
+    return s5l_mt_frame_encode(&geom, c, n, seq, ms, out);
+#if 0
     unsigned len;
     uint32_t scale_x;
     if (!dev || !out) return 0u;
@@ -1495,6 +1529,7 @@ unsigned s5l_mtz2_encode(const s5l_mtz2_t *dev, const s5l_mt_contact_t *c,
         put16(&r[30], (uint16_t)(c[i].minor * scale_x));
     }
     return len;
+#endif
 }
 
 

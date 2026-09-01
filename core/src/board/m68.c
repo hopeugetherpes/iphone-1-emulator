@@ -48,7 +48,15 @@ static bool m68_attach(s5l8900_t *m) {
     if (!s5l_spi_attach(&m->spi[1], 0u, &lcd)) return false;
     m->spi[1].cs = 0u;
 
-    /* Z1 is a later milestone; the board intentionally leaves this absent. */
+    s5l_spi_slave_t touch;
+    s5l_mtz1_reset(&m->mtz1);
+    m->mtz1.trace = m->trace_devices;
+    s5l_mtz1_bind(&m->mtz1, &touch);
+    if (!s5l_spi_attach(&m->spi[2], 0u, &touch)) return false;
+    if (!s5l_gpio_watch(&m->gpio, MTZ1_PIN_SELECT, &m->mtz1,
+                        s5l_mtz1_select_pin)) m->stub_declare_failures++;
+    if (!s5l_gpio_watch(&m->gpio, MTZ1_PIN_POWER, &m->mtz1,
+                        s5l_mtz1_power_pin)) m->stub_declare_failures++;
     return true;
 }
 

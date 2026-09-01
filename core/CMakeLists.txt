@@ -25,6 +25,8 @@ add_library(emucore STATIC
     src/soc/gpioic.c
     src/soc/buttons.c
     src/soc/mtz2.c
+    src/soc/mt_common.c
+    src/soc/mtz1.c
     src/soc/usbotg.c
     src/soc/pl080.c
     src/soc/nor.c
@@ -56,7 +58,7 @@ endif()
 
 # Unit tests that need no firmware.
 foreach(t test_arm test_soc test_devicetree test_macho test_lzss test_loader test_vfp
-          test_spi test_i2c test_gpioic test_buttons test_mtz2 test_pl080
+          test_spi test_i2c test_gpioic test_buttons test_mtz2 test_mtz1 test_pl080
           test_mbx test_nand test_snapshot test_ksyms test_img3 test_aes
           test_board test_bringup_os1)
     add_executable(${t} tests/${t}.c)
