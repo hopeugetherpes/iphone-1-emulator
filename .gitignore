@@ -1,0 +1,10 @@
+build/
+/firmware/
+*.ipsw
+*.dmg
+*.img
+*.img2
+*.8900
+*.macho
+*.ppm
+__pycache__/
