@@ -24,7 +24,8 @@ core/           portable emulator core (no host UI, no libc beyond C11) -> WASM-
   src/arm/      ARMv6 interpreter (arm_interp.c), VFP
   src/mmu.c     ARMv6 short-descriptor MMU + TLB
   src/soc/      shared S5L8900 devices: vic, gpioic, timer, clcd, spi, i2c, i2s,
-                dma (pl080), nor, nand, mbx, power, uart, usbotg, storage, buttons
+                dma (pl080), nor, nand, mbx, power, uart, usbotg, storage, buttons,
+                shared multitouch reports and the Z1/Z2 controllers
   src/board/    board definitions: board.c (registry), m68.c, n82.c
   src/boot/     bringup.c (iOS 3 / N82 path), bringup_os1.c (OS 1.0 path),
                 dt_patch.c (device-tree patching shared by both)
@@ -47,7 +48,7 @@ base; no board `if` statements exist in SoC or boot code.
 | RAM base / size | `0x08000000`, 128 MiB | `0x08000000`, 128 MiB |
 | NOR base | `0x24000000` | `0x00000000` (in-SoC alias used by iOS 3) |
 | LCD | `lcd,merlot` on **SPI1** CS0 | `lcd,merlot` on SPI0 |
-| Touch | `multi-touch,z1` on **SPI2** (not yet modeled) | MTZ2 on SPI1 CS0 |
+| Touch | `multi-touch,z1` on **SPI2** CS0 | MTZ2 on SPI1 CS0 |
 | Audio | `audio-control,wm8758` on I2C0 `0x1a` | WM8991 |
 | PMU | PCF50635 on I2C0 `0x73` | PCF50635 on I2C0 |
 | Panel ID patch | none (OS 1.0 reads `_lcdPanelID: 0x000000`) | required |
@@ -93,7 +94,7 @@ MMIO (from the M68 device tree, `/arm-io` ranges):
 | `0x04c00000`/`04c04000`/`04c0c000`/`04c10000` | | UART0/1/3/4 |
 | `0x04e00000` | | SPI1 |
 | `0x05000000` | | PKE |
-| `0x05200000` | | SPI2 |
+| `0x05200000` | | SPI2 (runtime physical `0x3d200000`) |
 | `0x06200000` | | timer |
 | `0x06300000` | | watchdog |
 | `0x06400000` | | GPIO |
@@ -232,6 +233,14 @@ time for 12G instructions.
   kernel took a wild data abort during symbol lookup.
 * **Merlot LCD on SPI1**, PCF50635 PMU, WM8758 (register writes are NAKed and
   the driver tolerates it), CLCD scanout to the host framebuffer.
+* **Z1 multitouch on SPI2 CS0.** The model implements the two-stage bootloader:
+  `c2` A-speed upload, `c4` execute, `c3` B-speed stream, `05` checksum, then
+  `c4` firmware transition. Firmware mode uses full-duplex `aa` replies for
+  `d0` interface version, `8f` report information, `82` report data and `92`
+  set-report. Result-length reads use `aa L_hi L_lo checksum_hi checksum_lo`;
+  result-data reads return a `0xcc` path frame followed by its big-endian
+  payload checksum. Reports `d1`, `d3`, `d7`, `d9`, `d0`, `a1` and `ab` share
+  MTZ2's 15-row, 10-column, 4800x7200 geometry. Attention is GPIOIC line 163.
 
 ## 8. Workarounds currently in force (each is a substitution for hardware we
 have not modeled yet, not a firmware patch)
@@ -243,11 +252,7 @@ have not modeled yet, not a firmware patch)
    callback runs before the pointer is stored, i.e. real hardware/timing gives
    the PHY a slower registration path. USB is not needed for SpringBoard.
    Replaceable by modeling USB OTG PHY registration timing.
-2. `--unmatch arm-io/spi2/multi-touch` — same mechanism for the Z1 multitouch
-   controller. SpringBoard blocks forever in the multitouch user client
-   otherwise (data abort inside the IOKit MIG path). Replaceable by implementing
-   the Z1 SPI device, which is also the prerequisite for touch input.
-3. Single-ramdisk root. The stock `/etc/fstab` mounts `/dev/disk0s1` and
+2. Single-ramdisk root. The stock `/etc/fstab` mounts `/dev/disk0s1` and
    `/dev/disk0s2`; we boot the rootfs as `md0` with no NAND partitions, so
    `launchd` aborts in `fwexec(mount_tool)`. `tools/firmware/rootfs_work.py`
    builds a *work image* (a copy; the extracted firmware image is never
@@ -293,7 +298,7 @@ before the ~5G-instruction mark where SpringBoard wakes up.
 No activation record, certificate or signature is involved; the data ark is
 per-device state, not an Apple binary.
 
-## 10. Diagnostics in the harness
+## 10. Diagnostics and input in the harness
 
 `--trace-devices`, `--break-pc`, `--watch-pc`, `--trace-from/--trace-last`
 (cycle-based, 2M-entry ring of `pc/cpsr/r0-r3/lr/sp`), `--exec-pc` (prints every
@@ -303,11 +308,36 @@ per-device state, not an Apple binary.
 instruction count so kernel messages line up with the syscall log. `tools/firmware/ksym.py` and the local `tsym.py`
 annotate traces with kernel symbols.
 
+Repeatable host input is available without a UI frontend:
+
+```text
+--at STEP tap X Y
+--at STEP touch down|move|up X Y
+--at STEP button NAME down|up
+--at STEP press NAME
+```
+
+`NAME` is one of `hold`, `menu`, `volup`, `voldown` and `ringerab`. Every
+injected event is printed to stderr. `tap` sends contact 1 down and schedules
+an automatic lift 200000 instructions later; `press` releases the button
+300000 instructions later. Touch events call the machine-level API and use the
+same coordinate conversion as MTZ2.
+
+Snapshots preserve the guest CPU instruction count and device state:
+
+```text
+--save-at 5800000000 /home/ubuntu/firmware/home.snap
+--load /home/ubuntu/firmware/home.snap --at 6000000000 tap 48 60 --steps 6500000000
+```
+
+Loading resumes absolute instruction counting from the saved CPU cycle count;
+`--steps` is an absolute stop count, not an additional run length. Snapshot
+files and firmware images belong outside this repository.
+
 ## 11. Next steps
 
 1. Input: Home/hold buttons through the M68 buttons GPIOs (dismiss the Repair
-   alert, wake the display), then the Z1 multitouch SPI device -> remove
-   workaround 2 and get touch working.
+   alert, wake the display), and Z1 multitouch scripted events.
 2. Speed: 12G instructions take ~5.5 min; an interpreter fast path or a JIT for
    the boot-to-home-screen path is needed before interactive use (and the WASM
    port).
