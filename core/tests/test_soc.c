@@ -2443,11 +2443,6 @@ static void test_machine_declares_its_known_windows(void) {
         { S5L8900_GPIO_BASE,   "gpio"      },
         { S5L8900_EDGEIC_BASE, "edgeic"    },
         { S5L8900_GPIOIC_BASE, "gpioic"    },
-        /* spi0 and spi1 are NOT here. They are device models now, so a store
-         * into one no longer reads back — see core/src/soc/spi.c. spi2 is still
-         * a stub because its interrupts are GPIO lines this machine cannot
-         * route. */
-        { S5L8900_SPI2_BASE,   "spi2"      },
     };
     for (unsigned i = 0; i < sizeof WANT / sizeof WANT[0]; i++) {
         /* Reads must come back as storage, not as the unmapped-access zero. */
@@ -2481,44 +2476,27 @@ static void test_machine_declares_its_known_windows(void) {
 }
 
 /*
- * The exact spi2 access shape run23 recorded, replayed against the machine
- * alone. com.apple.driver.BasebandSPI writes a configuration block through the
- * register base it caches at object+0xc4, and ~824 M instructions later reads
- * offsets 0x00, 0x04, 0x08 and 0x34 straight back to build a transfer
- * descriptor — it stores them, it never tests them for a status bit, and it
- * never polls. Against an undeclared window every one of those reads returned
- * zero. The property under test is that a driver reading back its own
- * configuration gets its own configuration.
- *
- * This is a window, not a controller: nothing here claims spi2 transfers data,
- * raises its device-tree interrupt 7, or drives SRDY/MRDY.
+ * SPI2 is the same controller model as SPI0 and SPI1. It additionally has the
+ * M68 Z1 slave attached by the board, so controller register semantics are
+ * tested here without assuming that the baseband transport is implemented.
  */
 static void test_baseband_spi_window_reads_back_its_configuration(void) {
     s5l8900_t m;
     CHECK(s5l8900_init(&m, 0, 1u << 20), "machine init failed");
 
-    /* The observed write burst, in the order BasebandSPI issues it. */
-    static const struct { uint32_t off, val; } BURST[] = {
-        { 0x00u, 0x0000000cu }, { 0x0cu, 0x00000000u },
-        { 0x38u, 0x00000000u }, { 0x34u, 0x00000000u },
-        { 0x30u, 0x00000002u }, { 0x08u, 0x0000000fu },
-        { 0x04u, 0x0001d01au },
+    static const struct { uint32_t off, val; } REGS[] = {
+        { SPI_CONTROL, 0x0000000du }, { SPI_SETUP, 0x0000000fu },
+        { SPI_PIN, 0x00000000u }, { SPI_CLKDIV, 0x00000002u },
+        { SPI_CNT, 0x00000000u }, { SPI_IDD, 0x00000000u },
     };
-    for (unsigned i = 0; i < sizeof BURST / sizeof BURST[0]; i++)
-        m.bus.write32(m.bus.ctx, S5L8900_SPI2_BASE + BURST[i].off, BURST[i].val);
-
-    /* The read-back the driver performs, at the exact four offsets. */
-    static const struct { uint32_t off, val; } BACK[] = {
-        { 0x00u, 0x0000000cu }, { 0x04u, 0x0001d01au },
-        { 0x08u, 0x0000000fu }, { 0x34u, 0x00000000u },
-    };
-    for (unsigned i = 0; i < sizeof BACK / sizeof BACK[0]; i++)
-        CHECK(m.bus.read32(m.bus.ctx, S5L8900_SPI2_BASE + BACK[i].off)
-                  == BACK[i].val,
-              "spi2 +0x%02x read %08x, expected the %08x that was written",
-              BACK[i].off,
-              m.bus.read32(m.bus.ctx, S5L8900_SPI2_BASE + BACK[i].off),
-              BACK[i].val);
+    for (unsigned i = 0; i < sizeof REGS / sizeof REGS[0]; i++) {
+        m.bus.write32(m.bus.ctx, S5L8900_SPI2_BASE + REGS[i].off,
+                      REGS[i].val);
+        CHECK(m.bus.read32(m.bus.ctx, S5L8900_SPI2_BASE + REGS[i].off)
+                  == REGS[i].val,
+              "spi2 +0x%02x register readback mismatch",
+              REGS[i].off);
+    }
 
     /* None of this traffic may be accounted as unmapped any more. */
     CHECK(m.unmapped_reads == 0 && m.unmapped_writes == 0,
@@ -2534,17 +2512,8 @@ static void test_baseband_spi_window_reads_back_its_configuration(void) {
     m.bus.write32(m.bus.ctx, S5L8900_SPI0_BASE + SPI_SETUP, 0xa0a0a0a0u);
     m.bus.write32(m.bus.ctx, S5L8900_SPI1_BASE + SPI_SETUP, 0xb1b1b1b1u);
     CHECK(m.spi[0].setup == 0xa0a0a0a0u && m.spi[1].setup == 0xb1b1b1b1u &&
-          m.bus.read32(m.bus.ctx, S5L8900_SPI2_BASE + 0x04u) == 0x0001d01au,
+          m.spi[2].setup == 0x0000000fu,
           "the three SPI windows must be independent");
-
-    /* The last word of the page must still be backed: a short backing store
-     * once swallowed exactly the high offsets that mattered. */
-    m.bus.write32(m.bus.ctx, S5L8900_SPI2_BASE + S5L8900_DEV_SIZE - 4u,
-                  0xfeedfaceu);
-    CHECK(m.bus.read32(m.bus.ctx,
-                       S5L8900_SPI2_BASE + S5L8900_DEV_SIZE - 4u)
-              == 0xfeedfaceu,
-          "the last word of the spi2 window must be backed");
 
     s5l8900_free(&m);
 }
@@ -2967,8 +2936,8 @@ static void test_tvout_machine_routing_and_irq30(void) {
      * 22 with the two PL080 DMA controllers that feed those I2S FIFOs,
      * and from 22 to 23 when the PowerVR MBX block was modelled so its
      * kext could get past its reset handshake. */
-    CHECK(nw == m.stub_count + 23u,
-          "fixed device-window count=%u expect 23 (+%u stubs)",
+    CHECK(nw == m.stub_count + 24u,
+          "fixed device-window count=%u expect 24 (+%u stubs)",
           nw - m.stub_count, m.stub_count);
     bool have_ctrl = false, have_mixer = false, have_sdo = false;
     for (unsigned i = 0; i < nw && i < S5L_WINDOW_MAX; i++) {
