@@ -262,7 +262,7 @@ int main(int argc,char **argv) {
                     fprintf(stderr, "too many --at events\n");
                     return 2;
                 }
-                e.step += 200000u;
+                e.step += 40000000u;
                 e.kind = INPUT_LIFT;
                 events[event_n++] = e;
             } else if (!strcmp(action, "touch") && i + 3 < argc) {

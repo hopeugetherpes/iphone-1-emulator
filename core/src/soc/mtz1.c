@@ -49,6 +49,10 @@ static void reset_protocol(s5l_mtz1_t *d) {
     d->last_n = 0;
     d->frame_seq = 0;
     d->frame_ms = 0;
+    memset(d->held, 0, sizeof d->held);
+    d->held_n = 0;
+    d->lift_pending = false;
+    d->tick_acc = 0;
     d->pkt_len = 0;
     d->rx_len = 0;
     d->transaction_overflow = false;
@@ -359,30 +363,79 @@ bool s5l_mtz1_irq(const s5l_mtz1_t *dev) {
 
 bool s5l_mtz1_set_contacts(s5l_mtz1_t *d, const s5l_mt_contact_t *c,
                            unsigned n) {
-    s5l_mt_contact_t lifted[MTZ2_CONTACT_MAX];
+    s5l_mt_contact_t first[MTZ2_CONTACT_MAX];
     unsigned len;
-    if (!d || !d->firmware || d->pending_len) return false;
+    if (!d || !d->firmware) return false;
     if (!n) {
-        n = d->last_n;
-        if (!n) return false;
-        memcpy(lifted, d->last_contacts, n * sizeof lifted[0]);
-        for (unsigned i = 0; i < n; i++) {
-            lifted[i].phase = MTZ2_PHASE_BREAK_TOUCH;
-            lifted[i].pressure = 0u;
-        }
-        c = lifted;
+        if (!d->held_n) return false;
+        d->lift_pending = true;
+        return true;
     }
     if (!c || n > MTZ2_CONTACT_MAX) return false;
-    len = s5l_mt_frame_encode(&d->geom, c, n,
+    if (d->pending_len) return false;
+    memcpy(first, c, n * sizeof first[0]);
+    for (unsigned i = 0; i < n; i++) first[i].phase = MTZ2_PHASE_MAKE_TOUCH;
+    len = s5l_mt_frame_encode(&d->geom, first, n,
                               (uint8_t)(d->frame_seq + 1u),
-                              d->frame_ms + MTZ2_FRAME_PERIOD_MS, d->pending);
+                              d->frame_ms, d->pending);
     if (!len) return false;
-    memcpy(d->last_contacts, c, n * sizeof d->last_contacts[0]);
+    memcpy(d->held, first, n * sizeof d->held[0]);
+    d->held_n = (uint8_t)n;
+    d->lift_pending = false;
+    d->tick_acc = 0u;
+    memcpy(d->last_contacts, first, n * sizeof d->last_contacts[0]);
     d->last_n = (uint8_t)n;
     d->pending_len = (uint8_t)len;
     d->frame_seq++;
-    d->frame_ms += MTZ2_FRAME_PERIOD_MS;
+    d->frame_ms += MTZ1_FRAME_PERIOD_MS;
     d->frames_queued++;
     d->atn = true;
     return true;
+}
+
+static bool queue_held_frame(s5l_mtz1_t *d, uint8_t phase,
+                             bool clear_pressure) {
+    s5l_mt_contact_t frame[MTZ2_CONTACT_MAX];
+    unsigned len;
+    if (!d || !d->held_n || d->pending_len) return false;
+    memcpy(frame, d->held, d->held_n * sizeof frame[0]);
+    for (unsigned i = 0; i < d->held_n; i++) {
+        frame[i].phase = phase;
+        if (clear_pressure) frame[i].pressure = 0u;
+    }
+    len = s5l_mt_frame_encode(&d->geom, frame, d->held_n,
+                              (uint8_t)(d->frame_seq + 1u),
+                              d->frame_ms,
+                              d->pending);
+    if (!len) return false;
+    memcpy(d->last_contacts, frame, d->held_n * sizeof d->last_contacts[0]);
+    d->last_n = d->held_n;
+    d->pending_len = (uint8_t)len;
+    d->frame_seq++;
+    d->frame_ms += MTZ1_FRAME_PERIOD_MS;
+    d->frames_queued++;
+    d->atn = true;
+    return true;
+}
+
+void s5l_mtz1_tick(s5l_mtz1_t *d, uint32_t tb_ticks) {
+    if (!d) return;
+    if (!d->firmware) {
+        d->tick_acc = 0u;
+        return;
+    }
+    uint64_t total = (uint64_t)d->tick_acc + tb_ticks;
+    while (total >= MTZ1_FRAME_TICKS) {
+        total -= MTZ1_FRAME_TICKS;
+        if (d->pending_len) continue;
+        if (d->lift_pending) {
+            if (queue_held_frame(d, MTZ2_PHASE_BREAK_TOUCH, true)) {
+                d->held_n = 0u;
+                d->lift_pending = false;
+            }
+        } else if (d->held_n) {
+            (void)queue_held_frame(d, MTZ2_PHASE_TOUCHING, false);
+        }
+    }
+    d->tick_acc = (uint32_t)total;
 }

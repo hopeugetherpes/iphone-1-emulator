@@ -19,6 +19,11 @@ static uint16_t sum(const uint8_t *p, unsigned n) {
     return v;
 }
 
+static uint32_t frame_ms(const uint8_t *rx) {
+    return rx[7] | ((uint32_t)rx[8] << 8) |
+           ((uint32_t)rx[9] << 16) | ((uint32_t)rx[10] << 24);
+}
+
 int main(void) {
     s5l_mtz1_t d;
     s5l_spi_slave_t s;
@@ -27,6 +32,10 @@ int main(void) {
     s5l_mtz1_reset(&d);
     s5l_mtz1_bind(&d, &s);
     s5l_mtz1_power_pin(&d, true);
+    s5l_mt_contact_t c = { 1u, MTZ2_PHASE_MAKE_TOUCH, 48u, 60u,
+                           255u, 8u, 8u };
+    CHECK(!s5l_mtz1_set_contacts(&d, &c, 1u),
+          "reject contact in bootloader mode");
 
     memset(tx, 0, sizeof tx);
     tx[0] = 0xc2u;
@@ -127,8 +136,6 @@ int main(void) {
     CHECK(rx[0] == 0xaau && rx[1] == 0u && rx[2] == 0u &&
           rx[3] == 0u && rx[4] == 0u, "idle length");
 
-    s5l_mt_contact_t c = { 1u, MTZ2_PHASE_MAKE_TOUCH, 48u, 60u,
-                           255u, 8u, 8u };
     CHECK(s5l_mtz1_set_contacts(&d, &c, 1u), "queue contact");
     txn(&s, lr, rx, sizeof lr);
     unsigned l = rx[1] << 8 | rx[2];
@@ -140,9 +147,51 @@ int main(void) {
     txn(&s, data, rx, sizeof data);
     uint16_t dc = 0u;
     for (unsigned i = 1; i < 43u; i++) dc = (uint16_t)(dc + rx[i]);
-    CHECK(!d.atn && rx[1] == 0xccu && rx[4] == 1u &&
-          rx[43] == (uint8_t)(dc >> 8) && rx[44] == (uint8_t)dc,
-          "contact data/checksum/ATN");
+    CHECK(!d.atn, "contact ATN clear");
+    CHECK(rx[1] == 0xccu && rx[4] == 1u &&
+          rx[12] == MTZ2_PHASE_MAKE_TOUCH,
+          "contact data/phase");
+    CHECK(rx[43] == (uint8_t)(dc >> 8) && rx[44] == (uint8_t)dc,
+          "contact checksum");
+    CHECK(frame_ms(rx) == 0u && d.frame_ms == 10u,
+          "initial touch timestamp");
+
+    s5l_mtz1_tick(&d, MTZ1_FRAME_TICKS);
+    txn(&s, lr, rx, sizeof lr);
+    CHECK((rx[1] << 8 | rx[2]) == 44u && d.atn,
+          "touching frame queued");
+    txn(&s, data, rx, sizeof data);
+    CHECK(rx[1] == 0xccu && rx[4] == 1u &&
+          rx[12] == MTZ2_PHASE_TOUCHING,
+          "touching frame phase");
+    CHECK(frame_ms(rx) == 10u && d.frame_ms == 20u,
+          "touching frame timestamp (frame=%u state=%u)",
+          frame_ms(rx), d.frame_ms);
+
+    s5l_mtz1_tick(&d, MTZ1_FRAME_TICKS);
+    txn(&s, lr, rx, sizeof lr);
+    CHECK((rx[1] << 8 | rx[2]) == 44u && d.atn,
+          "second touching frame queued");
+    txn(&s, data, rx, sizeof data);
+    CHECK(rx[12] == MTZ2_PHASE_TOUCHING &&
+          frame_ms(rx) == 20u && d.frame_ms == 30u,
+          "second touching frame (frame=%u state=%u)",
+          frame_ms(rx), d.frame_ms);
+
+    CHECK(s5l_mtz1_set_contacts(&d, NULL, 0u), "schedule lift");
+    s5l_mtz1_tick(&d, MTZ1_FRAME_TICKS);
+    txn(&s, lr, rx, sizeof lr);
+    CHECK((rx[1] << 8 | rx[2]) == 44u && d.atn,
+          "break frame queued");
+    txn(&s, data, rx, sizeof data);
+    CHECK(rx[1] == 0xccu && rx[4] == 1u &&
+          rx[12] == MTZ2_PHASE_BREAK_TOUCH && rx[31] == 0u,
+          "break frame phase/pressure");
+    CHECK(!d.held_n && !d.lift_pending && frame_ms(rx) == 30u &&
+          d.frame_ms == 40u, "lift state cleared (frame=%u state=%u)",
+          frame_ms(rx), d.frame_ms);
+    s5l_mtz1_tick(&d, MTZ1_FRAME_TICKS);
+    CHECK(!d.atn, "no frame after lift");
 
     s5l_mtz2_t z2;
     uint8_t a[MTZ2_PAYLOAD_LIMIT], b[MTZ2_PAYLOAD_LIMIT];

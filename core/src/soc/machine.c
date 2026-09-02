@@ -1626,6 +1626,7 @@ static void s5l8900_refresh(s5l8900_t *m, uint32_t tb) {
      * refresh is therefore enough for WFI to observe both assertion and
      * deassertion without advancing guest time. */
     s5l_pcf50635_tick(&m->pmu, tb);
+    if (m->mtz1.present) s5l_mtz1_tick(&m->mtz1, tb);
     s5l_vic_set_line(&m->vic[0], S5L8900_IRQ_I2C0,
                      s5l_i2c_irq(&m->i2c[0]));
     s5l_vic_set_line(&m->vic[0], S5L8900_IRQ_I2C1,

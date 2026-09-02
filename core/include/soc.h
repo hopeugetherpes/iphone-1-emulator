@@ -3463,6 +3463,8 @@ unsigned s5l_mtz2_encode(const s5l_mtz2_t *dev, const s5l_mt_contact_t *c,
 #define MTZ1_PIN_SELECT 0x0705u
 #define MTZ1_PIN_POWER  0x0804u
 #define Z1_PARAM_BYTES  49u
+#define MTZ1_FRAME_TICKS 60000u
+#define MTZ1_FRAME_PERIOD_MS 10u
 
 typedef struct {
     bool     present, powered, selected, atn, trace;
@@ -3484,6 +3486,10 @@ typedef struct {
     s5l_mt_contact_t last_contacts[MTZ2_CONTACT_MAX];
     uint8_t  frame_seq;
     uint32_t frame_ms;
+    s5l_mt_contact_t held[MTZ2_CONTACT_MAX];
+    uint8_t  held_n;
+    bool     lift_pending;
+    uint32_t tick_acc;
 } s5l_mtz1_t;
 
 void     s5l_mtz1_reset(s5l_mtz1_t *dev);
@@ -3492,6 +3498,7 @@ bool     s5l_mtz1_irq(const s5l_mtz1_t *dev);
 void     s5l_mtz1_select_pin(void *ctx, bool level);
 void     s5l_mtz1_power_pin(void *ctx, bool level);
 bool     s5l_mtz1_set_contacts(s5l_mtz1_t *, const s5l_mt_contact_t *, unsigned n);
+void     s5l_mtz1_tick(s5l_mtz1_t *, uint32_t tb_ticks);
 
 /* ------------------------------------ Synopsys DWC2 USB OTG (config only) ---
  * The four hardware-configuration registers AppleSynopsysOTGDevice reads out of

@@ -206,9 +206,10 @@ SNAP_SIZE_GUARD(s5l_stub_t,        56,    "snap_stubs");
  * restore resumes between transactions, while the protocol and queued frame
  * state remain serialized.
  * v36 adds the Z1 input-detection control report state.
- * v37 replaces that one report with the complete Z1 parameter table. */
-SNAP_SIZE_GUARD(s5l_mtz1_t,        1448,   "snap_mtz1");
-SNAP_SIZE_GUARD(s5l8900_t,         127416, "snap_mach");
+ * v37 replaces that one report with the complete Z1 parameter table.
+ * v38 adds held-contact stream state to Z1. */
+SNAP_SIZE_GUARD(s5l_mtz1_t,        1504,   "snap_mtz1");
+SNAP_SIZE_GUARD(s5l8900_t,         127472, "snap_mach");
 #endif
 
 /* ---------------------------------------------------------------- the IO --- */
@@ -670,6 +671,8 @@ static void snap_mtz1(sn_io_t *io, s5l_mtz1_t *d) {
     FBYTES(d->pending, MTZ2_PAYLOAD_LIMIT); F8(d->pending_len);
     FBYTES(d->last_contacts, sizeof d->last_contacts);
     F8(d->frame_seq); F32(d->frame_ms);
+    FBYTES(d->held, sizeof d->held); F8(d->held_n); FB(d->lift_pending);
+    F32(d->tick_acc);
     if (sn_reading(io)) {
         d->rx_len = 0u;
         d->pkt_len = 0u;
