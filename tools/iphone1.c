@@ -109,9 +109,11 @@ static void print_pc_log(s5l8900_t *m, uint32_t pc) {
     for (unsigned i = 0u; i < g_pc_log_n; i++)
         if (g_pc_log[i] == pc) match = true;
     if (!match) return;
-    printf("PCLOG cyc=%llu pc=%08x ttbr0=%08x r0..r3=%08x %08x %08x %08x",
+    printf("PCLOG cyc=%llu pc=%08x ttbr0=%08x r0..r3=%08x %08x %08x %08x "
+           "ip=%08x lr=%08x",
            (unsigned long long)m->cpu.cycles, pc, m->cpu.cp15.ttbr0,
-           m->cpu.r[0], m->cpu.r[1], m->cpu.r[2], m->cpu.r[3]);
+           m->cpu.r[0], m->cpu.r[1], m->cpu.r[2], m->cpu.r[3],
+           m->cpu.r[12], m->cpu.r[14]);
     print_va_bytes(m, m->cpu.r[0], sizeof (uint8_t[48]), "r0");
     print_va_bytes(m, m->cpu.r[1], sizeof (uint8_t[48]), "r1");
     puts("");
@@ -196,6 +198,7 @@ typedef struct {
     unsigned button;
     uint16_t x, y;
     bool pressed;
+    bool auto_lift;
 } input_event_t;
 
 static bool button_name(const char *name, unsigned *which) {
@@ -257,13 +260,7 @@ int main(int argc,char **argv) {
                 e.phase = MTZ2_PHASE_MAKE_TOUCH;
                 e.x = (uint16_t)strtoul(argv[++i], NULL, 0);
                 e.y = (uint16_t)strtoul(argv[++i], NULL, 0);
-                events[event_n++] = e;
-                if (event_n >= sizeof events / sizeof events[0]) {
-                    fprintf(stderr, "too many --at events\n");
-                    return 2;
-                }
-                e.step += 40000000u;
-                e.kind = INPUT_LIFT;
+                e.auto_lift = true;
                 events[event_n++] = e;
             } else if (!strcmp(action, "touch") && i + 3 < argc) {
                 const char *phase = argv[++i];
@@ -379,6 +376,9 @@ int main(int argc,char **argv) {
     tap_t t={serial?fopen(serial,"wb"):NULL,&m,true}; s5l8900_set_uart0_host(&m,tap,&t);
     arm_status_t st=ARM_OK; uint64_t total=m.cpu.cycles; uint32_t ring[32]={0}; unsigned ri=0, same=0;
     unsigned next_event = 0; bool saved = false;
+    bool tap_pending = false;
+    uint64_t tap_down_ticks = 0;
+    const uint64_t tap_duration_ticks = m.tb_hz ? m.tb_hz / 10u : 600000u;
     uint32_t last_window=0; const char *reason="steps exhausted";
     if (g_watch_n) { g_watch_m=&m; g_break_pc=break_pc&~1u;
         if (g_break_pc) g_watch[g_watch_n++]=g_break_pc;
@@ -394,6 +394,14 @@ int main(int argc,char **argv) {
                          (unsigned long long)total);
             saved = true;
         }
+        if (tap_pending &&
+            m.timer.ticks - tap_down_ticks >= tap_duration_ticks) {
+            bool ok = s5l8900_set_touch(&m, NULL, 0u);
+            fprintf(stderr, "input step=%llu touch up -> %s\n",
+                    (unsigned long long)total, ok ? "accepted" : "rejected");
+            tap_pending = false;
+            continue;
+        }
         unsigned slice=(unsigned)((steps-total)>1000000ull?1000000ull:steps-total);
         if (next_event < event_n && events[next_event].step <= total) {
             input_event_t *e = &events[next_event++];
@@ -407,6 +415,10 @@ int main(int argc,char **argv) {
                 fprintf(stderr, "%s %u %u -> %s\n",
                         e->kind == INPUT_LIFT ? "touch up" : "touch",
                         e->x, e->y, ok ? "accepted" : "rejected");
+                if (ok && e->auto_lift) {
+                    tap_pending = true;
+                    tap_down_ticks = m.timer.ticks;
+                }
             } else {
                 bool ok = s5l8900_set_button(&m, e->button, e->pressed);
                 fprintf(stderr, "button %u %s -> %s\n", e->button,

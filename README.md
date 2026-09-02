@@ -48,8 +48,8 @@ The harness also supports repeatable `--pc-log ADDR` targets for logging
 registers and readable argument buffers at selected guest PCs, as well as
 `--at STEP tap X Y`, `--at STEP touch down|move|up X Y`, and
 `--at STEP press NAME` for scripted input.
-`tap` schedules its automatic lift 40,000,000 instructions after the down
-event (approximately 100 ms at the current guest pacing).
+`tap` schedules its automatic lift after 100 ms of guest time. Explicit
+`touch down|move|up` events remain step-scheduled.
 
 Keep firmware outside the tree (the `.gitignore` also excludes the usual
 extensions).

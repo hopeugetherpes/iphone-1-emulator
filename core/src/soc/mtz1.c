@@ -49,6 +49,8 @@ static void reset_protocol(s5l_mtz1_t *d) {
     d->last_n = 0;
     d->frame_seq = 0;
     d->frame_ms = 0;
+    d->uptime_ms = 0;
+    d->uptime_tick_acc = 0;
     memset(d->held, 0, sizeof d->held);
     d->held_n = 0;
     d->lift_pending = false;
@@ -375,9 +377,11 @@ bool s5l_mtz1_set_contacts(s5l_mtz1_t *d, const s5l_mt_contact_t *c,
     if (d->pending_len) return false;
     memcpy(first, c, n * sizeof first[0]);
     for (unsigned i = 0; i < n; i++) first[i].phase = MTZ2_PHASE_MAKE_TOUCH;
+    uint32_t stamp = d->uptime_ms;
+    if (d->frames_queued && stamp <= d->frame_ms) stamp = d->frame_ms + 1u;
     len = s5l_mt_frame_encode_ce(&d->geom, first, n,
                                  (uint8_t)(d->frame_seq + 1u),
-                                 d->frame_ms, d->pending);
+                                 stamp, d->pending);
     if (!len) return false;
     memcpy(d->held, first, n * sizeof d->held[0]);
     d->held_n = (uint8_t)n;
@@ -387,7 +391,7 @@ bool s5l_mtz1_set_contacts(s5l_mtz1_t *d, const s5l_mt_contact_t *c,
     d->last_n = (uint8_t)n;
     d->pending_len = (uint8_t)len;
     d->frame_seq++;
-    d->frame_ms += MTZ1_FRAME_PERIOD_MS;
+    d->frame_ms = stamp;
     d->frames_queued++;
     d->atn = true;
     return true;
@@ -403,16 +407,18 @@ static bool queue_held_frame(s5l_mtz1_t *d, uint8_t phase,
         frame[i].phase = phase;
         if (clear_pressure) frame[i].pressure = 0u;
     }
+    uint32_t stamp = d->uptime_ms;
+    if (d->frames_queued && stamp <= d->frame_ms) stamp = d->frame_ms + 1u;
     len = s5l_mt_frame_encode_ce(&d->geom, frame, d->held_n,
                                  (uint8_t)(d->frame_seq + 1u),
-                                 d->frame_ms,
+                                 stamp,
                                  d->pending);
     if (!len) return false;
     memcpy(d->last_contacts, frame, d->held_n * sizeof d->last_contacts[0]);
     d->last_n = d->held_n;
     d->pending_len = (uint8_t)len;
     d->frame_seq++;
-    d->frame_ms += MTZ1_FRAME_PERIOD_MS;
+    d->frame_ms = stamp;
     d->frames_queued++;
     d->atn = true;
     return true;
@@ -420,7 +426,15 @@ static bool queue_held_frame(s5l_mtz1_t *d, uint8_t phase,
 
 void s5l_mtz1_tick(s5l_mtz1_t *d, uint32_t tb_ticks) {
     if (!d) return;
-    if (!d->firmware || (!d->held_n && !d->lift_pending)) {
+    if (!d->firmware) {
+        d->tick_acc = 0u;
+        d->uptime_tick_acc = 0u;
+        return;
+    }
+    uint64_t uptime = (uint64_t)d->uptime_tick_acc + tb_ticks;
+    d->uptime_ms += (uint32_t)(uptime / MTZ1_TICKS_PER_MS);
+    d->uptime_tick_acc = (uint32_t)(uptime % MTZ1_TICKS_PER_MS);
+    if (!d->held_n && !d->lift_pending) {
         d->tick_acc = 0u;
         return;
     }

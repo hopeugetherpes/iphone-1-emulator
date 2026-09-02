@@ -208,8 +208,8 @@ SNAP_SIZE_GUARD(s5l_stub_t,        56,    "snap_stubs");
  * v36 adds the Z1 input-detection control report state.
  * v37 replaces that one report with the complete Z1 parameter table.
  * v38 adds held-contact stream state to Z1. */
-SNAP_SIZE_GUARD(s5l_mtz1_t,        1504,   "snap_mtz1");
-SNAP_SIZE_GUARD(s5l8900_t,         127472, "snap_mach");
+SNAP_SIZE_GUARD(s5l_mtz1_t,        1512,   "snap_mtz1");
+SNAP_SIZE_GUARD(s5l8900_t,         127480, "snap_mach");
 #endif
 
 /* ---------------------------------------------------------------- the IO --- */

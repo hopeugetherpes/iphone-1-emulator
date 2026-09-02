@@ -242,11 +242,18 @@ time for 12G instructions.
   checksum. Z1 input frames use type `0xce`, with a 16-byte header and 16-bit
   contact coordinates plus density/total fields. The 1A543a parser's `0xcc`
   path route hard-codes contact density to zero, so a `0xcc` frame can never
-  pass the make/break density threshold and register a touch. Reports `d1`,
+  pass the make/break density threshold and register a touch. Z1 timestamps are
+  device uptime in milliseconds, not frame-relative time; the model advances
+  that clock from the 6 MHz timebase even while idle. This matters because
+  MultitouchSupport's cheek and flat-finger-clasp face detectors use a
+  99-millisecond hysteresis against an initially zero last-detected timestamp:
+  small frame timestamps produce face flags and suppress fingers. Reports `d1`,
   `d3`, `d7`, `d9`, `d0`, and `a1` share MTZ2's 15-row, 10-column, 4800x7200
   geometry. Z1 Zephyr parameters use the table-backed reports listed in
   `core/src/soc/mtz1.c`; the 1A543a init sequence ends with `0xbf` and `0xaf`
-  set-reports and does not write `0xab`. Attention is GPIOIC line 163.
+  set-reports and does not write `0xab`. The frame-timestamp and face-flag
+  observations came from MultitouchSupport PCs `0x3130e07c` and `0x3130e12c`.
+  Attention is GPIOIC line 163.
 
 ## 8. Workarounds currently in force (each is a substitution for hardware we
 have not modeled yet, not a firmware patch)

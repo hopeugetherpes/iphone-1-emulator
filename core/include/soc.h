@@ -3470,6 +3470,7 @@ unsigned s5l_mtz2_encode(const s5l_mtz2_t *dev, const s5l_mt_contact_t *c,
 #define Z1_PARAM_BYTES  49u
 #define MTZ1_FRAME_TICKS 60000u
 #define MTZ1_FRAME_PERIOD_MS 10u
+#define MTZ1_TICKS_PER_MS (MTZ1_FRAME_TICKS / MTZ1_FRAME_PERIOD_MS)
 
 typedef struct {
     bool     present, powered, selected, atn, trace;
@@ -3495,6 +3496,8 @@ typedef struct {
     uint8_t  held_n;
     bool     lift_pending;
     uint32_t tick_acc;
+    uint32_t uptime_ms;
+    uint32_t uptime_tick_acc;
 } s5l_mtz1_t;
 
 void     s5l_mtz1_reset(s5l_mtz1_t *dev);

@@ -136,8 +136,9 @@ int main(void) {
     CHECK(rx[0] == 0xaau && rx[1] == 0u && rx[2] == 0u &&
           rx[3] == 0u && rx[4] == 0u, "idle length");
 
-    s5l_mtz1_tick(&d, MTZ1_FRAME_TICKS * 10u + 1u);
-    CHECK(d.tick_acc == 0u, "idle ticks do not accumulate");
+    s5l_mtz1_tick(&d, MTZ1_TICKS_PER_MS * 1000u);
+    CHECK(d.tick_acc == 0u && d.uptime_ms == 1000u,
+          "idle ticks do not accumulate and advance uptime");
     CHECK(s5l_mtz1_set_contacts(&d, &c, 1u), "queue contact");
     txn(&s, lr, rx, sizeof lr);
     unsigned l = rx[1] << 8 | rx[2];
@@ -160,8 +161,8 @@ int main(void) {
           "CE contact data/phase/density");
     CHECK(rx[49] == (uint8_t)(dc >> 8) && rx[50] == (uint8_t)dc,
           "contact checksum");
-    CHECK(frame_ms(rx) == 0u && d.frame_ms == 10u,
-          "initial touch timestamp");
+    CHECK(frame_ms(rx) == 1000u && d.frame_ms == 1000u,
+          "initial touch timestamp uses uptime");
 
     uint64_t queued = d.frames_queued;
     for (unsigned i = 0; i < 600u; i++) s5l_mtz1_tick(&d, 100u);
@@ -175,7 +176,7 @@ int main(void) {
           rx[18] == MTZ2_PHASE_TOUCHING &&
           rx[33] == 0xffu && rx[37] == 0xffu,
           "touching frame phase");
-    CHECK(frame_ms(rx) == 10u && d.frame_ms == 20u,
+    CHECK(frame_ms(rx) == 1010u && d.frame_ms == 1010u,
           "touching frame timestamp (frame=%u state=%u)",
           frame_ms(rx), d.frame_ms);
 
@@ -185,7 +186,7 @@ int main(void) {
           "second touching frame queued");
     txn(&s, data, rx, sizeof data);
     CHECK(rx[18] == MTZ2_PHASE_TOUCHING &&
-          frame_ms(rx) == 20u && d.frame_ms == 30u,
+          frame_ms(rx) == 1020u && d.frame_ms == 1020u,
           "second touching frame (frame=%u state=%u)",
           frame_ms(rx), d.frame_ms);
 
@@ -199,8 +200,8 @@ int main(void) {
           rx[18] == MTZ2_PHASE_BREAK_TOUCH &&
           rx[33] == 0u && rx[37] == 0u,
           "break frame phase/density");
-    CHECK(!d.held_n && !d.lift_pending && frame_ms(rx) == 30u &&
-          d.frame_ms == 40u, "lift state cleared (frame=%u state=%u)",
+    CHECK(!d.held_n && !d.lift_pending && frame_ms(rx) == 1030u &&
+          d.frame_ms == 1030u, "lift state cleared (frame=%u state=%u)",
           frame_ms(rx), d.frame_ms);
     s5l_mtz1_tick(&d, MTZ1_FRAME_TICKS);
     CHECK(!d.atn, "no frame after lift");
