@@ -209,7 +209,7 @@ SNAP_SIZE_GUARD(s5l_stub_t,        56,    "snap_stubs");
  * v37 replaces that one report with the complete Z1 parameter table.
  * v38 adds held-contact stream state to Z1. */
 SNAP_SIZE_GUARD(s5l_mtz1_t,        1512,   "snap_mtz1");
-SNAP_SIZE_GUARD(s5l8900_t,         127480, "snap_mach");
+SNAP_SIZE_GUARD(s5l8900_t,         127488, "snap_mach");
 #endif
 
 /* ---------------------------------------------------------------- the IO --- */
@@ -1077,7 +1077,7 @@ static void snap_nor(sn_io_t *io, s5l_nor_t *n) {
  * Deliberately NOT serialised: `cpu` (own section), `bus` (host function
  * pointers and callback contexts — a tool may have interposed on them),
  * `ram` (host allocation), `pre_step_hook`/its context, targets and counters,
- * and the interpreter tick-batching counters, MBX work ledger, uart4 host-peer
+ * and the interpreter tick-batching state/counters, MBX work ledger, uart4 host-peer
  * callbacks/context and WFI pacing callback/context/counters (live host
  * policy/measurement),
  * `nor.data` and `stubs[].regs`/`stubs[].name` (host allocations / string
@@ -1616,6 +1616,7 @@ static snapshot_status_t snap_apply(s5l8900_t *m, FILE *f,
      * this is what keeps it out of the file format — see `level_dirty` in
      * soc.h — and it is the safe direction: it costs one full refresh. */
     m->level_dirty = true;
+    m->batch_pending = 0u;
     /* A yield belongs to the host run call that observed the wait, not to the
      * restored guest instant. The callback, context and accumulated evidence
      * remain the live frontend's, exactly like the other host-only fields. */

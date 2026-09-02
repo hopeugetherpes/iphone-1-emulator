@@ -212,6 +212,33 @@ SpringBoard's main thread then sits in a healthy CFRunLoop (~2k syscalls per
 guest-second, mostly `mach_msg` with CommCenter). The run takes ~5.5 min of host
 time for 12G instructions.
 
+### Interpreter speed and cycles per instruction
+
+The first measured interpreter optimization keeps the existing guest-visible
+timing contract while reducing host overhead. The 10.19G-instruction
+home-snapshot benchmark (`--no-fb`) measured:
+
+| build | best of two runs | instruction rate |
+| --- | ---: | ---: |
+| baseline | 12.509590342 s | 814.6 M instructions/s |
+| native `-O3` + IPO | 11.623522044 s | 876.7 M instructions/s |
+| privileged tick batching | 10.812390565 s | 942.4 M instructions/s |
+
+The baseline `perf` profile's top ten symbols were:
+`arm_step` (21.27%), `thumb_step` (17.79%), `s5l8900_run` (10.96%),
+`s5l8900_tick` (6.46%), `exec_data_processing` (5.93%),
+`mem_r32_as` (5.86%), `arm_mmu_translate` (4.35%),
+`sn_raw.part.0` (2.41%), `snap_verify_stream.constprop.0` (2.26%), and
+`arm_cond_passed` (2.16%).
+
+Interpreter tick batching now applies in privileged modes as well as User
+mode, stopping at each timebase edge and immediately flushing before WFI,
+guest MMIO, host input, or a host-time callback. The privileged SVC hook
+continues to disable batching because it can execute host work inside
+`arm_step()`. The WFI flush uses direct `s5l8900_tick()` so pending retired
+instructions are represented before the idle jump; in active-clock mode this
+also records the observed guest ticks for the next host-clock synchronization.
+
 ### Cycles per instruction
 
 `--cpi` and the WebAssembly `emu_set_cpi` API model the average ARM1176 cycles
@@ -455,9 +482,9 @@ files and firmware images belong outside this repository.
 
 1. Input: Home/hold buttons through the M68 buttons GPIOs (dismiss the Repair
    alert, wake the display), and Z1 multitouch scripted events.
-2. Speed: 12G instructions take ~5.5 min; an interpreter fast path or a JIT for
-   the boot-to-home-screen path is needed before interactive use (and the WASM
-   port).
+2. Speed: native interpreter batching and `-O3` + IPO now improve the measured
+   host rate; an interpreter fast path or a JIT for the boot-to-home-screen
+   path may provide further gains before interactive use.
 3. Model USB OTG PHY registration ordering -> remove workaround 1; model NAND
    partitions -> remove workaround 3.
 4. Then: application launching, Settings, MobileSafari, stability; only after

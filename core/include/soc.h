@@ -4081,6 +4081,12 @@ typedef struct {
     bool       level_dirty;
 
     /*
+     * Runtime-only retirement count used while an interpreter batch is inside
+     * arm_step(). It is not snapshot state and must be zero between run calls.
+     */
+    unsigned   batch_pending;
+
+    /*
      * What the last full refresh saw on the three inputs a HOST can move
      * WITHOUT going through the bus, packed by ext_inputs() in machine.c.
      *

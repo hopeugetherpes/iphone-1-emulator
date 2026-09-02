@@ -1095,6 +1095,12 @@ static bool machine_wait_for_interrupt(void *ctx) {
     s5l8900_t *m = ctx;
     if (!m) return false;
 
+    if (m->batch_pending) {
+        unsigned pending = m->batch_pending;
+        m->batch_pending = 0u;
+        s5l8900_tick(m, pending);
+    }
+
     /* A line that is already high completes WFI even when CPSR masks it.  This
      * check precedes the controller refresh so an externally injected CPU line
      * is not lost. */
@@ -1526,6 +1532,7 @@ bool s5l8900_wake_from_standby(s5l8900_t *m) {
      * instant from any pre-sleep host-clock anchor. Lifetime evidence counters
      * remain intact, including the monotonic retired-instruction count above. */
     s5l8900_static_a64_invalidate_derived(m);
+    m->batch_pending = 0u;
     m->wfi_pace_yield = false;
     m->active_clock_last_host_ns = 0u;
     m->active_clock_guest_ticks_since_sync = 0u;
@@ -1801,16 +1808,18 @@ static unsigned run_retirement_batch_limit(const s5l8900_t *m,
 /*
  * Collapse only the calls to s5l8900_tick(), never ARM execution itself.
  *
- * User mode is the safety boundary: WFI and privileged host SVC can advance
- * device time from inside arm_step(), while User code cannot. A pre-step hook
- * can have a target anywhere in the interval, and the signed engine owns its
- * own boundary contract, so either policy disables this path completely.
+ * WFI can advance device time from inside arm_step(), so the pending
+ * retirement count is flushed before the wait. A privileged host SVC can do
+ * the same through an opaque callback, so its presence disables this path.
+ * A pre-step hook can have a target anywhere in the interval, and the signed
+ * engine owns its own boundary contract, so either policy disables this path
+ * completely.
  */
 static unsigned interpreter_tick_batch_limit(const s5l8900_t *m,
                                               unsigned remaining,
                                               bool active_clock) {
-    if ((m->cpu.cpsr & ARM_CPSR_MODE_MASK) != ARM_MODE_USR ||
-        m->pre_step_hook)
+    if (m->pre_step_hook ||
+        (m->cpu.bus && m->cpu.bus->privileged_svc_handler))
         return 0u;
 #if defined(S5LBOX_STATIC_A64_ENGINE)
     if (s5l8900_static_a64_is_enabled(m)) return 0u;
@@ -2034,6 +2043,7 @@ unsigned s5l8900_run(s5l8900_t *m, unsigned max_steps, arm_status_t *status) {
 #endif
     /* A direct arm_step() may have used the same machine between run calls.
      * Only a wait reached during THIS bounded slice may shorten it. */
+    m->batch_pending = 0u;
     m->wfi_pace_yield = false;
     if (max_steps && m->active_host_now)
         active_clock = active_host_clock_sync(m, 0u);
@@ -2110,37 +2120,50 @@ unsigned s5l8900_run(s5l8900_t *m, unsigned max_steps, arm_status_t *status) {
 
         /* A limit of one cannot save a tick call, so retain the smaller
          * ordinary path at the edge itself. Inside a real batch, inspect every
-         * retirement boundary for the exact three events the public tick would
-         * have observed: guest MMIO, a host-driven input, or departure from
-         * User mode. The final lump contains only successfully retired
+         * retirement boundary for the exact events the public tick would have
+         * observed: guest MMIO, a host-driven input, WFI, or another host-time
+         * callback. The final lump contains only successfully retired
          * instructions; a non-OK arm_step() receives no device tick, matching
          * the literal loop exactly. */
         unsigned limit = interpreter_tick_batch_limit(
             m, max_steps - n, active_clock);
         if (limit > 1u) {
             unsigned retired = 0u;
+            unsigned total_retired = 0u;
+            bool flushed = false;
             do {
+                unsigned retired_before = retired;
+                m->batch_pending = retired_before;
                 st = arm_step(&m->cpu);
-                if (st != ARM_OK) break;
-                retired++;
+                if (st != ARM_OK) {
+                    m->batch_pending = 0u;
+                    break;
+                }
+                flushed = m->batch_pending != retired_before;
+                retired = m->batch_pending + 1u;
+                total_retired++;
                 if (m->level_dirty || ext_inputs(m) != m->ext_seen ||
-                    (m->cpu.cpsr & ARM_CPSR_MODE_MASK) != ARM_MODE_USR)
+                    flushed || m->wfi_pace_yield)
                     break;
             } while (retired < limit);
 
-            if (retired) {
-                n += retired;
+            if (total_retired) {
+                n += total_retired;
                 m->interpreter_tick_batches++;
-                m->interpreter_tick_batched_retired += retired;
+                m->interpreter_tick_batched_retired += total_retired;
                 run_clock_retired(m, &active_clock,
                                   &active_pending_retired, retired,
-                                  st != ARM_OK,
+                                  st != ARM_OK || m->wfi_pace_yield,
                                   m->level_dirty ||
                                   ext_inputs(m) != m->ext_seen ||
-                                  (m->cpu.cpsr & ARM_CPSR_MODE_MASK) !=
-                                      ARM_MODE_USR);
+                                  flushed || m->wfi_pace_yield);
             }
             if (st != ARM_OK) break;
+            if (m->wfi_pace_yield) {
+                m->wfi_pace_yield = false;
+                break;
+            }
+            m->batch_pending = 0u;
             continue;
         }
 
@@ -2165,6 +2188,7 @@ unsigned s5l8900_run(s5l8900_t *m, unsigned max_steps, arm_status_t *status) {
 #endif
     if (m->uart4_host_service)
         m->uart4_host_service(m->uart4_host_ctx, n);
+    m->batch_pending = 0u;
     if (status) *status = st;
     return n;
 }

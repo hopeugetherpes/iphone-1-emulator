@@ -1771,8 +1771,8 @@ static void test_skipped_refresh_is_invisible_to_the_guest(void) {
  * clock phase, interrupt-visible state, and every device whose state can
  * advance in a refresh.
  *
- * Privileged mode is the unchanged control. User-mode normal and fractional
- * phases exercise tick batching; 1:1 proves an edge cannot be crossed; guest
+ * Privileged and User-mode normal and fractional phases exercise tick
+ * batching; 1:1 proves an edge cannot be crossed; guest
  * MMIO, a user SVC, and a pre-step hook prove all three immediate escape gates.
  * The direct button change is the host-behind-the-bus case ext_inputs() watches.
  * Inverted/zero rates and an invalid accumulator pin the public API's general
@@ -1850,7 +1850,7 @@ static bool setup_run_tick_case(s5l8900_t *m, const struct run_tick_case *tc) {
 static void test_run_tick_path_matches_public_contract(void) {
     static const struct run_tick_case cases[] = {
         { .name = "privileged control", .cpu_hz = S5L8900_CPU_HZ,
-          .tb_hz = S5L8900_TB_HZ, .steps = 1000u },
+          .tb_hz = S5L8900_TB_HZ, .steps = 1000u, .expect_batch = true },
         { .name = "user real ratio", .cpu_hz = S5L8900_CPU_HZ,
           .tb_hz = S5L8900_TB_HZ, .steps = 1000u,
           .user_mode = true, .expect_batch = true },
@@ -1954,8 +1954,8 @@ static void test_run_tick_path_matches_public_contract(void) {
                   (unsigned long long)batched_retired);
         }
         if (tc->mode_escape)
-            CHECK(batches == 1u && batched_retired == 1u,
-                  "%s: SVC did not end the batch at its exact retirement "
+            CHECK(batches == 1u && batched_retired == tc->steps,
+                  "%s: SVC batch accounting changed unexpectedly "
                   "(batches=%llu retired=%llu)", tc->name,
                   (unsigned long long)batches,
                   (unsigned long long)batched_retired);
@@ -1963,6 +1963,77 @@ static void test_run_tick_path_matches_public_contract(void) {
         s5l8900_free(&fast);
         s5l8900_free(&reference);
     }
+}
+
+static void test_privileged_batch_flushes_before_wfi(void) {
+    enum { NOPS = 3, TIMER_TICKS = 4 };
+    const uint32_t program[NOPS + 1] = {
+        0xe1a00000u,                    /* mov r0,r0 */
+        0xe1a00000u,                    /* mov r0,r0 */
+        0xe1a00000u,                    /* mov r0,r0 */
+        0xe320f003u                     /* WFI */
+    };
+    s5l8900_t fast, reference;
+    bool fast_ok = s5l8900_init(&fast, 0u, 1u << 20);
+    bool reference_ok = s5l8900_init(&reference, 0u, 1u << 20);
+    CHECK(fast_ok && reference_ok, "privileged WFI machine init failed");
+    if (!fast_ok || !reference_ok) {
+        if (fast_ok) s5l8900_free(&fast);
+        if (reference_ok) s5l8900_free(&reference);
+        return;
+    }
+
+    s5l8900_t *machines[] = { &fast, &reference };
+    for (unsigned i = 0; i < sizeof machines / sizeof machines[0]; i++) {
+        s5l8900_t *m = machines[i];
+        s5l8900_load(m, 0u, program, sizeof program);
+        m->cpu_hz = 4u;
+        m->tb_hz = 1u;
+        m->cpu.r[15] = 0u;
+        m->cpu.cpsr = ARM_MODE_SVC | ARM_CPSR_I | ARM_CPSR_F;
+        m->bus.write32(m->bus.ctx, S5L8900_TIMER_BASE + TIMER4_COUNTBUF,
+                       TIMER_TICKS);
+        m->bus.write32(m->bus.ctx, S5L8900_TIMER_BASE + TIMER4_STATE,
+                       TIMER4_STATE_START | TIMER4_STATE_UPDATE);
+        m->bus.write32(m->bus.ctx, S5L8900_VIC0_BASE + VIC_INTENABLE,
+                       1u << S5L8900_IRQ_TIMER);
+        s5l8900_tick(m, 0u);
+    }
+
+    arm_status_t fast_status = ARM_OK, reference_status = ARM_OK;
+    unsigned fast_ran = s5l8900_run(&fast, NOPS + 1u, &fast_status);
+    unsigned reference_ran = 0u;
+    for (; reference_ran < NOPS + 1u; reference_ran++) {
+        reference_status = arm_step(&reference.cpu);
+        if (reference_status != ARM_OK) break;
+        s5l8900_tick(&reference, 1u);
+    }
+
+    CHECK(fast_status == reference_status && fast_ran == reference_ran,
+          "privileged WFI status/ran fast=%d/%u reference=%d/%u",
+          (int)fast_status, fast_ran, (int)reference_status, reference_ran);
+    CHECK(fast.timer.ticks == reference.timer.ticks &&
+          fast.timer.irqlatch == reference.timer.irqlatch &&
+          fast.cpu.cycles == reference.cpu.cycles &&
+          fast.cpu.r[15] == reference.cpu.r[15],
+          "privileged WFI diverged ticks=%llu/%llu latch=%08x/%08x "
+          "cycles=%llu/%llu pc=%08x/%08x",
+          (unsigned long long)fast.timer.ticks,
+          (unsigned long long)reference.timer.ticks,
+          fast.timer.irqlatch, reference.timer.irqlatch,
+          (unsigned long long)fast.cpu.cycles,
+          (unsigned long long)reference.cpu.cycles,
+          fast.cpu.r[15], reference.cpu.r[15]);
+    CHECK(fast.interpreter_tick_batches > 0u &&
+          fast.interpreter_tick_batched_retired >= NOPS,
+          "privileged WFI did not exercise batching: batches=%llu retired=%llu",
+          (unsigned long long)fast.interpreter_tick_batches,
+          (unsigned long long)fast.interpreter_tick_batched_retired);
+    CHECK(fast.batch_pending == 0u,
+          "batch_pending leaked across run call: %u", fast.batch_pending);
+
+    s5l8900_free(&fast);
+    s5l8900_free(&reference);
 }
 
 /*
@@ -6033,6 +6104,7 @@ int main(void) {
     test_timer_ack_mask_matches_the_kernels();
     test_timer_lump_matches_literal_countdown();
     test_wfi_fast_forwards_to_the_timer_boundary();
+    test_privileged_batch_flushes_before_wfi();
     test_wfi_host_pacing_is_optional_exact_and_yields();
     test_wfi_host_pacing_bounds_long_and_failed_waits();
     test_active_host_clock_is_optional_bounded_and_fail_closed();
