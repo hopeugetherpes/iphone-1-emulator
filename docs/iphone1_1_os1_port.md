@@ -292,26 +292,42 @@ have not modeled yet, not a firmware patch)
 
 No Apple binary is modified anywhere in this pipeline.
 
-## 9. Activation (solved by seeding lockdownd's cache)
+## 9. Activation: lockdownd verification path
 
-Unseeded, SpringBoard shows "Activate iPhone" because `lockdownd` reports the device as
-unactivated. Disassembly of the genuine `lockdownd` shows the state comes from
-its "data ark":
+Unseeded, `lockdownd` eventually recomputes activation at startup from
+`/var/root/Library/Lockdown/activation_record.plist`: with no record it logs
+"The activation record was not valid" and sets the activation state to
+`Unactivated`, even if a cached data-ark state initially let SpringBoard reach
+the home screen. The genuine verification path loads
+`/System/Library/Lockdown/iPhoneActivation.pem` and
+`iPhoneDeviceCA.pem` with `PEM_read_X509`. The checks are visible around
+`0x8b18` (record check), `0x9de0` (certificate/signature verification), and
+`0xa070` (state selection):
 
-* it reads `/var/root/Library/Lockdown/data_ark.plist` (absent on a fresh
-  filesystem) and `/System/Library/Lockdown/Checkpoint.xml`;
-* with no cached state it logs "No cached activation state" and sets
-  `Unactivated`;
-* the activation-record check (at `0x9de0` in the binary) verifies
-  `DeviceCertificate`/`AccountToken`/`AccountTokenSignature` against
-  `/System/Library/Lockdown/iPhoneActivation.pem` and `iPhoneDeviceCA.pem`
-  (or the `Factory*` pair) — i.e. iTunes' signature, which we cannot produce.
+* `DeviceCertificate` is verified with the public key in
+  `iPhoneDeviceCA.pem`;
+* `AccountToken` is hashed with SHA-1 and `AccountTokenSignature` is checked
+  with `RSA_verify(NID_sha1, ...)` and the public key in
+  `iPhoneActivation.pem` (PKCS#1 v1.5);
+* when `AccountToken` is not parseable as a property list,
+  `lockdownd` selects `Activated` directly after the cryptographic checks.
 
-The cheap, binary-preserving route is therefore to seed a cached *Activated*
-state in the data ark of the work image. `rootfs_work.py --add
-/var/root/Library/Lockdown/data_ark.plist=data_ark.plist` creates the folder
-and file in the HFSX catalog (folder/file + thread records, allocation bitmap,
-volume counters, both volume headers). The seed is a flat plist:
+The observed unseeded syslog path is therefore "The activation record was not
+valid" followed by "Setting the activation state to Unactivated" when the
+record is absent. With the local authority in place, act40 instead logged
+`SpringBoard[12]: lockdown says the device is: [Activated], state is 2` and
+repeated `lockdown: The activation state has not changed.` lines. The
+`rootfs_work.py --activate` option supplies the data that hardware activation
+normally receives from Apple's service: a locally generated device certificate
+signed by a local device CA, a local activation certificate, and a matching
+activation record whose non-plist token is signed with SHA-1/RSA. It replaces
+the two certificate *data files* and adds the record; no Apple binary is
+modified. The keys are throwaway and are never written into the image.
+
+The separate `--add` seed still supplies a cached *Activated* state during the
+early boot path. It creates `/var/root/Library/Lockdown/data_ark.plist` in the
+HFSX catalog (folder/file + thread records, allocation bitmap, volume counters,
+both volume headers). The seed is a flat plist:
 
 ```xml
 <dict>
@@ -321,12 +337,9 @@ volume counters, both volume headers). The seed is a flat plist:
 ```
 
 `--swi-log` confirms `lockdownd` opens `/var/root//Library/Lockdown/data_ark.plist`,
-and with it SpringBoard proceeds to the home screen (§6). Earlier seeded runs
-looked like a regression (kernel text only) purely because they were stopped
-before the ~5G-instruction mark where SpringBoard wakes up.
-
-No activation record, certificate or signature is involved; the data ark is
-per-device state, not an Apple binary.
+and with it SpringBoard proceeds to the home screen (§6). The data ark is
+per-device state, not an Apple binary; `--activate` additionally keeps the
+later activation-record verification on the Activated path.
 
 ## 10. Diagnostics and input in the harness
 

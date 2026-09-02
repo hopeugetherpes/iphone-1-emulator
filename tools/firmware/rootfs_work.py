@@ -13,6 +13,7 @@ Usage:
       [--launchd-env NAME=K=V,...]     add EnvironmentVariables to a launchd
                                        plist NAME (binary plist rewritten)
       [--no-autolock]                 set SpringBoard auto-lock and dim to Never
+      [--activate]                    seed a locally verified activation record
       [--add GUEST_PATH=HOSTFILE]...  add a new file, creating directories
 """
 import os
@@ -20,6 +21,13 @@ import plistlib
 import shutil
 import struct
 import sys
+from datetime import datetime, timezone
+
+from cryptography import x509
+from cryptography.exceptions import UnsupportedAlgorithm
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
+from cryptography.x509.oid import NameOID
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import hfsx_extract as H  # noqa: E402
@@ -440,6 +448,139 @@ class Work:
         self.cat = c
 
 
+def _der_len(n):
+    if n < 0x80:
+        return bytes([n])
+    raw = n.to_bytes((n.bit_length() + 7) // 8, "big")
+    return bytes([0x80 | len(raw)]) + raw
+
+
+def _der(tag, data):
+    return bytes([tag]) + _der_len(len(data)) + data
+
+
+def _der_integer(n):
+    raw = n.to_bytes((n.bit_length() + 7) // 8 or 1, "big")
+    if raw[0] & 0x80:
+        raw = b"\0" + raw
+    return _der(0x02, raw)
+
+
+def _der_oid(oid):
+    parts = [int(x) for x in oid.split(".")]
+    out = bytes([40 * parts[0] + parts[1]])
+    for n in parts[2:]:
+        encoded = bytes([n & 0x7f])
+        n >>= 7
+        while n:
+            encoded = bytes([0x80 | (n & 0x7f)]) + encoded
+            n >>= 7
+        out += encoded
+    return _der(0x06, out)
+
+
+def _der_name(common_name):
+    def attribute(oid, value):
+        return _der(0x31, _der(0x30, _der_oid(oid) +
+                                _der(0x0c, value.encode("utf-8"))))
+    return _der(0x30, attribute("2.5.4.3", common_name) +
+                attribute("2.5.4.10", "iphone-1 emulator"))
+
+
+def _der_public_key(key):
+    numbers = key.public_key().public_numbers()
+    rsa_key = _der(0x30, _der_integer(numbers.n) + _der_integer(numbers.e))
+    algorithm = _der(0x30, _der_oid("1.2.840.113549.1.1.1") + _der(0x05, b""))
+    return _der(0x30, algorithm +
+                _der(0x03, b"\0" + rsa_key))
+
+
+def _der_certificate(subject_cn, issuer_cn, subject_key, signer_key,
+                     serial, ca=False):
+    algorithm = _der(0x30, _der_oid("1.2.840.113549.1.1.5") + _der(0x05, b""))
+    validity = _der(0x30, _der(0x17, b"070101000000Z") +
+                    _der(0x18, b"20371231235959Z"))
+    extensions = b""
+    if ca:
+        basic_constraints = _der(0x30, _der(0x01, b"\xff"))
+        extension = _der(0x30, _der_oid("2.5.29.19") +
+                         _der(0x01, b"\xff") +
+                         _der(0x04, basic_constraints))
+        extensions = _der(0xa3, _der(0x30, extension))
+    tbs = _der(0x30, _der(0xa0, _der_integer(2)) +
+               _der_integer(serial) + algorithm + _der_name(issuer_cn) +
+               validity + _der_name(subject_cn) + _der_public_key(subject_key) +
+               extensions)
+    signature = signer_key.sign(tbs, padding.PKCS1v15(), hashes.SHA1())
+    return x509.load_der_x509_certificate(
+        _der(0x30, tbs + algorithm + _der(0x03, b"\0" + signature)))
+
+
+def _local_activation_data():
+    activation_key = rsa.generate_private_key(public_exponent=65537,
+                                               key_size=2048)
+    ca_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    device_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    not_before = datetime(2007, 1, 1, tzinfo=timezone.utc)
+    not_after = datetime(2037, 12, 31, tzinfo=timezone.utc)
+
+    def name(common_name):
+        return x509.Name([
+            x509.NameAttribute(NameOID.COMMON_NAME, common_name),
+            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "iphone-1 emulator"),
+        ])
+
+    def certificate(subject, issuer, subject_key, signer_key, ca=False):
+        builder = (x509.CertificateBuilder()
+                   .subject_name(subject)
+                   .issuer_name(issuer)
+                   .public_key(subject_key.public_key())
+                   .serial_number(x509.random_serial_number())
+                   .not_valid_before(not_before)
+                   .not_valid_after(not_after))
+        if ca:
+            builder = builder.add_extension(
+                x509.BasicConstraints(ca=True, path_length=None), critical=True)
+        try:
+            return builder.sign(signer_key, hashes.SHA1())
+        except UnsupportedAlgorithm:
+            return _der_certificate(subject.get_attributes_for_oid(
+                NameOID.COMMON_NAME)[0].value,
+                issuer.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value,
+                subject_key, signer_key, x509.random_serial_number(), ca)
+
+    activation_name = name("Local iPhone Activation")
+    activation_cert = certificate(activation_name, activation_name,
+                                  activation_key, activation_key)
+    ca_name = name("Local iPhone Device CA")
+    ca_cert = certificate(ca_name, ca_name, ca_key, ca_key, ca=True)
+    device_cert = certificate(name("Local iPhone Device"), ca_name,
+                              device_key, ca_key)
+
+    activation_pem = activation_cert.public_bytes(serialization.Encoding.PEM)
+    ca_pem = ca_cert.public_bytes(serialization.Encoding.PEM)
+    device_pem = device_cert.public_bytes(serialization.Encoding.PEM)
+    for label, data in (("iPhoneActivation.pem", activation_pem),
+                        ("iPhoneDeviceCA.pem", ca_pem)):
+        if len(data) > 4096:
+            raise SystemExit("%s is %d bytes; exceeds its 4096-byte file block"
+                             % (label, len(data)))
+
+    account_token = b"iphone-1 local activation\n"
+    signature = activation_key.sign(account_token, padding.PKCS1v15(),
+                                    hashes.SHA1())
+    activation_key.public_key().verify(signature, account_token,
+                                        padding.PKCS1v15(), hashes.SHA1())
+    ca_key.public_key().verify(
+        device_cert.signature, device_cert.tbs_certificate_bytes,
+        padding.PKCS1v15(), device_cert.signature_hash_algorithm)
+    return activation_pem, ca_pem, {
+        "DeviceCertificate": device_pem,
+        "AccountToken": account_token,
+        "AccountTokenSignature": signature,
+    }
+
+
 def main():
     a = sys.argv[1:]
     if len(a) < 2:
@@ -449,6 +590,7 @@ def main():
     w = Work(dst)
     i = 2
     no_autolock = False
+    activate = False
     while i < len(a):
         if a[i] == "--fstab":
             line = a[i + 1]
@@ -470,6 +612,9 @@ def main():
         elif a[i] == "--no-autolock":
             no_autolock = True
             i += 1
+        elif a[i] == "--activate":
+            activate = True
+            i += 1
         elif a[i] == "--add":
             guest, host = a[i + 1].split("=", 1)
             w.add_file(guest, host)
@@ -490,6 +635,24 @@ def main():
         if existing:
             w.replace_file_path(path, data)
         else:
+            w.add_file_data(path, data)
+    if activate:
+        activation_pem, ca_pem, record = _local_activation_data()
+        for path, data in (
+                ("/System/Library/Lockdown/iPhoneActivation.pem", activation_pem),
+                ("/System/Library/Lockdown/iPhoneDeviceCA.pem", ca_pem)):
+            if not w.find_file_path(path):
+                raise SystemExit("%s: file not found" % path)
+            w.replace_file_path(path, data)
+        path = "/var/root/Library/Lockdown/activation_record.plist"
+        existing = w.find_file_path(path)
+        if existing:
+            old = plistlib.loads(w.read_file_path(path))
+            old.update(record)
+            data = plistlib.dumps(old, fmt=plistlib.FMT_XML)
+            w.replace_file_path(path, data)
+        else:
+            data = plistlib.dumps(record, fmt=plistlib.FMT_XML)
             w.add_file_data(path, data)
 
 

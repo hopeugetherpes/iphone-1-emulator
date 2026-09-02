@@ -21,13 +21,15 @@ python3 tools/firmware/rootfs_work.py fw/rootfs_1A543a_hfs.img fw/work_1A543a.im
     --fstab "/dev/md0 / hfs rw 0 1" \
     --launchd-env com.apple.SpringBoard.plist=LK_ENABLE_MBX2D=0,LK_ENABLE_OGL=0 \
     --add /var/root/Library/Lockdown/data_ark.plist=tools/firmware/data_ark_activated.plist \
-    --no-autolock
+    --no-autolock --activate
 ```
 
-The `--add` option seeds `lockdownd`'s cached activation state so SpringBoard
-goes to the home screen instead of "Activate iPhone"; `--no-autolock` seeds
-the SpringBoard idle-time preferences. No Apple binary is modified; the
-extracted image is copied, never changed.
+The `--add` option seeds `lockdownd`'s cached activation state, while
+`--activate` replaces the two Lockdown certificate data files in the work image
+and adds a locally signed activation record so the genuine verifier continues
+to report Activated. `--no-autolock` seeds the SpringBoard idle-time
+preferences. These are data-file changes only; no Apple binary is modified,
+and the extracted image is copied, never changed.
 
 ## Build and run
 

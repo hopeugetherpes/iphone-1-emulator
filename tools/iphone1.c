@@ -127,7 +127,14 @@ static bool watch_hook(void *ctx) {
         /* XNU execve(proc, uap, retval): uap->fname is a user_addr_t whose
          * low word is at [r1]; the caller's map is still current. */
         uint32_t fname=0; read_va32(m,m->cpu.r[1],&fname);
-        printf("EXEC cyc=%llu ",(unsigned long long)m->cpu.cycles); print_va_str(stdout,m,fname); puts("");
+        printf("EXEC cyc=%llu ",(unsigned long long)m->cpu.cycles); print_va_str(stdout,m,fname);
+        uint32_t argv=0; read_va32(m,m->cpu.r[1]+4u,&argv);
+        for (unsigned a=0; a<6u && argv; a++) {
+            uint32_t arg=0;
+            if (!read_va32(m,argv+4u*a,&arg) || !arg) break;
+            putchar(' '); print_va_str(stdout,m,arg);
+        }
+        puts("");
         return false;
     }
     if (g_swi_pc && pc==g_swi_pc) {
@@ -144,6 +151,14 @@ static bool watch_hook(void *ctx) {
             fprintf(g_swi_log,"  msg bits=%08x remote=%x local=%x id=%d\n",hb,rp,lp,(int)id);
         } else if (no==5||no==188||no==33||no==59) { /* open, stat, access, execve */
             fputs("  path ",g_swi_log); print_va_str(g_swi_log,m,m->cpu.r[0]); fputc('\n',g_swi_log);
+        } else if (no==4||no==133) { /* write, sendto: printable prefix of the buffer */
+            uint32_t n=m->cpu.r[2]; if (n>200u) n=200u;
+            fputs("  data \"",g_swi_log);
+            for (uint32_t i=0;i<n;i++) { uint32_t w=0;
+                if (!read_va32(m,(m->cpu.r[1]+i)&~3u,&w)) break;
+                int ch=(int)((w>>(8u*((m->cpu.r[1]+i)&3u)))&0xffu);
+                fputc(ch>=0x20&&ch<0x7f?ch:'.',g_swi_log); }
+            fputs("\"\n",g_swi_log);
         }
         return false;
     }
@@ -183,7 +198,8 @@ static void dump_va(s5l8900_t *m, uint32_t va, unsigned words) {
     puts("");
 }
 static void usage(void) {
-    puts("iphone1 --board m68|n82 --kernel PATH --devicetree PATH [options]");
+    puts("iphone1 --board m68|n82 --kernel PATH --devicetree PATH [options]\n"
+         "  --dump-ram FILE  write the guest RAM image when the run ends");
 }
 
 typedef enum {
@@ -225,7 +241,7 @@ int main(int argc,char **argv) {
     uint32_t break_pc=0; uint64_t trace_from=UINT64_MAX; unsigned trace_last=256;
     uint32_t dump[8]; unsigned dump_n=0;
     const char *unmatch[16]; unsigned unmatch_n=0; uint64_t shot_every=0; uint32_t mmio_watch=0;
-    const char *load_path = NULL, *save_path = NULL;
+    const char *load_path = NULL, *save_path = NULL, *dump_ram = NULL;
     uint64_t save_step = UINT64_MAX;
     input_event_t events[128]; unsigned event_n = 0;
     for (int i=1;i<argc;i++) {
@@ -326,6 +342,7 @@ int main(int argc,char **argv) {
         else if (!strcmp(argv[i],"--break-swi")&&i+2<argc) { g_break_swi_set=true;
             g_break_swi=(int)strtol(argv[++i],NULL,0); g_break_swi_ttbr0=(uint32_t)strtoul(argv[++i],NULL,0); }
         else if (!strcmp(argv[i],"--dump-va")&&i+1<argc&&dump_n<8) dump[dump_n++]=(uint32_t)strtoul(argv[++i],NULL,0);
+        else if (!strcmp(argv[i],"--dump-ram")&&i+1<argc) dump_ram=argv[++i];
         else { usage(); return 2; }
     }
     const s5l_board_t *b=s5l_board_find(board_name);
@@ -497,5 +514,10 @@ int main(int argc,char **argv) {
             printf("bytes-at-pc=%02x%02x%02x%02x\n",m.ram[off],m.ram[off+1],m.ram[off+2],m.ram[off+3]);
     }
     if (shot&&!save_ppm(shot,&m)) fprintf(stderr,"screenshot failed: %s\n",shot);
+    if (dump_ram) {
+        FILE *rf=fopen(dump_ram,"wb");
+        if (!rf||fwrite(m.ram,1,m.ram_size,rf)!=m.ram_size) fprintf(stderr,"ram dump failed: %s\n",dump_ram);
+        if (rf) fclose(rf);
+    }
     if (t.serial) fclose(t.serial); s5l8900_free(&m); free(k.p);free(d.p);free(rd.p); return 0;
 }
