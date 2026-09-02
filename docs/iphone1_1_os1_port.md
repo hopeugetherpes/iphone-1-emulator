@@ -272,6 +272,27 @@ time for 12G instructions.
   preference, not a binary patch, and can be dropped once real-time speed
   makes the idle timer a non-issue.
 
+### App switching and the MBX 2D path
+
+With an activated, no-autolock work image, the sequence *dismiss alert → tap
+Safari → Menu → tap Settings → Menu* now ends on the genuine home screen each
+time (`home50`/`home51` runs, screenshots every 100M instructions). Two MBX
+fixes were needed, both derived from what SpringBoard/CoreSurface on 1A543a
+actually submits (`MBX2D reject ring+0x0040 (2 commands): packet terminators
+are incomplete`, followed by the guest's own `Graphics hang with pending 2D
+blit` / `Graphics Restart during 3D Blit` recovery):
+
+* OS 1.0 pads 2D copy/blend packets with a *variable* number of `0x70000000`
+  terminators (later firmware always pads to the maximum). The parser now
+  requires only the first terminator after the packet body, consumes the
+  contiguous run, and advances batched packets by the real length.
+* The app-close animation stretches single-column textures (constant u). The
+  textured-sprite validator accepts `u_start == u_end`.
+
+The close animation itself still scans out black for ~400M instructions (the
+3D blit path is not rendered), then the home screen reappears. Rendering that
+transition is cosmetic and left for later.
+
 ## 8. Workarounds currently in force (each is a substitution for hardware we
 have not modeled yet, not a firmware patch)
 
@@ -279,9 +300,38 @@ have not modeled yet, not a firmware patch)
    in the *loaded copy* of the device tree so IOKit does not match the USB
    drivers. Reason: `AppleS5L8900XUSBWrangler::phyRegistered` dereferences its
    notifier pointer, and with our (correct) synchronous registration the
-   callback runs before the pointer is stored, i.e. real hardware/timing gives
-   the PHY a slower registration path. USB is not needed for SpringBoard.
-   Replaceable by modeling USB OTG PHY registration timing.
+   callback runs before the pointer is stored. USB is not needed for
+   SpringBoard. What we know so far (`run_usb.sh` runs, `--pc-log` on
+   `_thread_setrun` `0xc0021e2c`, `_thread_invoke` switch `0xc005fa20`,
+   `_thread_quantum_expire` `0xc00206a4`, `csw_check` `0xc00217b4`):
+   * `AppleS5L8900XUSBWrangler::start` (`0xc043a32c`) calls
+     `IOService::addNotification` for the PHY and only stores the returned
+     notifier at `[this+0x6c]` afterwards (`0xc043a34c`); the callback
+     `phyRegistered` (`0xc043a4dc`) loads `[this+0x6c]` first. So the crash
+     occurs iff the PHY is already registered when the wrangler resumes.
+   * The wrangler's thread blocks ~50M instructions (77M→127M) waiting for the
+     interrupt controller (`AppleARMPL192VIC` registers at ~107M); the PHY
+     (`start` at 98.5M, no interrupt dependency) registers at ~99.5M.
+   * xnu-933's IOKit config threads are fixed-priority 81 and are **not**
+     time-sliced in kernel mode: `csw_check` returns `AST_PREEMPT` without
+     `AST_URGENT` (the pset `urgency` count is zero), and only urgent ASTs are
+     taken in `ml_set_interrupts_enabled`. The 27 config threads spawned when
+     `arm-io` publishes its children (64–65M) therefore run FIFO to their
+     first block, and the power→CPU→VIC chain woken at 72.9M does not run until
+     ~107M. `--insn-hz` experiments (60–275 MHz) moved nothing: the ordering is
+     a property of the guest scheduler, not of our timer pacing (timer4
+     programming was verified against `_s5l8900x_get_decrementer`:
+     `count_buffer - live_value`, i.e. a down-counter).
+   * The PHY's `start` touches only `0x3c400000` (OPHYPWR/ORSTCON bit
+     toggles with `IODelay`, no sleeps), so nothing in the PHY itself can make
+     it register later. The remaining hypothesis is that on hardware the
+     clock/power/VIC chain registers *before* the arm-io child burst (e.g. an
+     earlier interrupt-driven wakeup we do not reproduce), which would let the
+     wrangler run through without blocking. Unverified; still under
+     `--unmatch`.
+   Separately, without a USB device controller userspace `lockdownd` logs
+   `Can't find AppleUSBDeviceMux service` and is respawn-throttled by launchd;
+   that is harmless for SpringBoard and distinct from the kernel crash.
 2. Single-ramdisk root. The stock `/etc/fstab` mounts `/dev/disk0s1` and
    `/dev/disk0s2`; we boot the rootfs as `md0` with no NAND partitions, so
    `launchd` aborts in `fwexec(mount_tool)`. `tools/firmware/rootfs_work.py`
