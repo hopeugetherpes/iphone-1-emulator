@@ -293,9 +293,9 @@ static void note_unmapped(s5l8900_t *m, uint32_t addr) {
 
 static void note_device(s5l8900_t *m, uint32_t addr, uint32_t val, bool is_write) {
     if (m->mmio_watch_page && (addr & ~0xfffu) == m->mmio_watch_page)
-        fprintf(stderr, "[mmio] %llu %c 0x%08x = 0x%08x pc=0x%08x\n",
+        fprintf(stderr, "[mmio] %llu %c 0x%08x = 0x%08x pc=0x%08x ttbr0=0x%08x\n",
                 (unsigned long long)m->cpu.cycles, is_write ? 'W' : 'R',
-                addr, val, m->cpu.r[15]);
+                addr, val, m->cpu.r[15], m->cpu.cp15.ttbr0);
     if (!m->trace_devices || m->dev_count >= S5L_DEVLOG) return;
     m->dev_addr[m->dev_count]     = addr;
     m->dev_value[m->dev_count]    = val;
@@ -520,6 +520,7 @@ static void bus_write(void *ctx, uint32_t addr, uint32_t val, unsigned bytes) {
         return;
     }
     if (in_timer(addr, bytes)) {
+        note_device(m, addr, val, true);
         s5l_timer_write(&m->timer, addr - S5L8900_TIMER_BASE, val);
         return;
     }

@@ -80,6 +80,8 @@
 #define MBX_RING       64u
 
 /* AppleMBX+0x1188 copies submitted words into this 64 KiB hardware ring. */
+#define MBX_2D_COPY_BODY_WORDS 10u
+#define MBX_2D_BLEND_BODY_WORDS 12u
 #define MBX_2D_COPY_WORDS      16u
 #define MBX_2D_BLEND_WORDS     18u
 #define MBX_2D_END             0x70000000u
@@ -651,11 +653,9 @@ static bool mbx_stage_simple_copy(s5l_mbx_t *m, const arm_bus_t *bus,
             *why = "packet is not a decoded BGRA8 or ARGB1555 unity simple-copy form";
         return false;
     }
-    for (unsigned i = 10; i < MBX_2D_COPY_WORDS; i++) {
-        if (w[i] != MBX_2D_END) {
-            if (why) *why = "packet terminators are incomplete";
-            return false;
-        }
+    if (w[MBX_2D_COPY_BODY_WORDS] != MBX_2D_END) {
+        if (why) *why = "packet terminators are incomplete";
+        return false;
     }
 
     uint32_t src_x = (w[4] >> 14) & 0x1fffu;
@@ -796,11 +796,9 @@ static bool mbx_stage_rect_fill(s5l_mbx_t *m,
         if (why) *why = "packet is not the decoded BGRA8 fill form";
         return false;
     }
-    for (unsigned i = 10; i < MBX_2D_COPY_WORDS; i++) {
-        if (w[i] != MBX_2D_END) {
-            if (why) *why = "solid-fill packet terminators are incomplete";
-            return false;
-        }
+    if (w[MBX_2D_COPY_BODY_WORDS] != MBX_2D_END) {
+        if (why) *why = "solid-fill packet terminators are incomplete";
+        return false;
     }
     uint32_t left = (w[8] >> 16) & 0x1fffu;
     uint32_t top = w[8] & 0x1fffu;
@@ -889,11 +887,9 @@ static bool mbx_stage_premultiplied_copy(s5l_mbx_t *m,
         if (why) *why = "packet is not a decoded blended-copy form";
         return false;
     }
-    for (unsigned i = 12; i < MBX_2D_BLEND_WORDS; i++) {
-        if (w[i] != MBX_2D_END) {
-            if (why) *why = "premultiplied packet terminators are incomplete";
-            return false;
-        }
+    if (w[MBX_2D_BLEND_BODY_WORDS] != MBX_2D_END) {
+        if (why) *why = "premultiplied packet terminators are incomplete";
+        return false;
     }
 
     uint32_t source_stride = w[2] & 0x7fffu;
@@ -1023,6 +1019,19 @@ static bool mbx_stage_premultiplied_copy(s5l_mbx_t *m,
     return true;
 }
 
+/* A command is its body followed by one or more 0x70000000 terminator words;
+ * the OS 3 producer always pads to 16/18 words, the OS 1.0 producer emits a
+ * single terminator and starts the next head immediately after it. */
+static uint32_t mbx_2d_packet_words(const s5l_mbx_t *m, uint32_t packet_off,
+                                    uint32_t body_words, uint32_t max_words) {
+    uint32_t n = body_words;
+    while (n < max_words &&
+           packet_off + n * 4u < S5L_MBX_APERTURE &&
+           mbx_edram_word(m, packet_off + n * 4u) == MBX_2D_END)
+        n++;
+    return n;
+}
+
 static bool mbx_stage_2d_packet(s5l_mbx_t *m, const arm_bus_t *bus,
                                 uint32_t packet_off,
                                 const struct mbx_2d_batch_state *batch,
@@ -1059,18 +1068,24 @@ static bool mbx_stage_2d_packet(s5l_mbx_t *m, const arm_bus_t *bus,
         if (!mbx_stage_premultiplied_copy(m, bus, packet_off,
                                            batch, job, why))
             return false;
-        *packet_words = MBX_2D_BLEND_WORDS;
+        *packet_words = mbx_2d_packet_words(m, packet_off,
+                                            MBX_2D_BLEND_BODY_WORDS,
+                                            MBX_2D_BLEND_WORDS);
     } else if (mbx_edram_word(m, packet_off + 6u * 4u) ==
                MBX_2D_FILL_MODE) {
         if (!mbx_stage_rect_fill(m, bus, packet_off,
                                  batch, job, why))
             return false;
-        *packet_words = MBX_2D_COPY_WORDS;
+        *packet_words = mbx_2d_packet_words(m, packet_off,
+                                            MBX_2D_COPY_BODY_WORDS,
+                                            MBX_2D_COPY_WORDS);
     } else {
         if (!mbx_stage_simple_copy(m, bus, packet_off,
                                    batch, job, why))
             return false;
-        *packet_words = MBX_2D_COPY_WORDS;
+        *packet_words = mbx_2d_packet_words(m, packet_off,
+                                            MBX_2D_COPY_BODY_WORDS,
+                                            MBX_2D_COPY_WORDS);
     }
     return true;
 }
@@ -1395,7 +1410,7 @@ static bool mbx_bilinear_axis(float origin, float span,
                               uint32_t pixel, uint32_t dimension,
                               struct mbx_bilinear_axis *axis) {
     if (!axis || !dimension || dimension > 512u || span <= 0.0f ||
-        texel_origin < 0.0f || texel_span <= 0.0f)
+        texel_origin < 0.0f || texel_span < 0.0f)
         return false;
 
     float step = texel_span / span;
@@ -3008,7 +3023,10 @@ static bool mbx_execute_textured_sprite(s5l_mbx_t *m,
         normalized_u1 * (float)header_texture_width;
     float v_texel_end =
         normalized_v1 * (float)header_texture_height;
-    if (u_texel_start >= u_texel_end ||
+    /* A constant-u strip (both u edges on one texel column) is a legitimate
+     * gradient stretch: SpringBoard's app-close animation samples a single
+     * column of an 8x256 ramp across the full 320-pixel width. */
+    if (u_texel_start > u_texel_end ||
         v_texel_start >= v_texel_end ||
         u_texel_end > 512.0f || v_texel_end > 512.0f ||
         u_texel_end > (float)header_texture_width ||
