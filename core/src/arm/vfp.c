@@ -391,6 +391,16 @@ static inline void host_exceptions_clear(void) {
 static inline uint32_t host_exceptions(void) {
     return vfp_read_fpsr() & VFP_FPSR_CUMULATIVE;
 }
+#elif defined(__EMSCRIPTEN__)
+/*
+ * Emscripten's WebAssembly floating-point environment has no portable
+ * exception-status API. WebAssembly arithmetic is still IEEE-754, but the
+ * host exception flags cannot be observed here; leave the cumulative flags
+ * clear rather than depending on unavailable fenv constants.
+ */
+#  define VFP_HOST_FLAGS "wasm"
+static inline void host_exceptions_clear(void) {}
+static inline uint32_t host_exceptions(void) { return 0; }
 #else
 #  define VFP_HOST_FLAGS "fenv"
 static inline void host_exceptions_clear(void) {

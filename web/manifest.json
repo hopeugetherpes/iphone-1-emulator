@@ -1,0 +1,14 @@
+{
+  "kernel": "firmware/kernel.macho",
+  "devicetree": "firmware/devicetree.bin",
+  "rootfs": [
+    "firmware/rootfs.part0",
+    "firmware/rootfs.part1",
+    "firmware/rootfs.part2"
+  ],
+  "snapshot": [
+    "firmware/home.snap.part0",
+    "firmware/home.snap.part1",
+    "firmware/home.snap.part2"
+  ]
+}

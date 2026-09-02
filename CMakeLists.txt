@@ -11,4 +11,24 @@ endif()
 
 enable_testing()
 add_subdirectory(core)
-add_subdirectory(tools)
+option(IPHONE1_WEB "Build the Emscripten browser frontend" OFF)
+if(IPHONE1_WEB)
+    add_executable(emu web/emu_api.c)
+    target_link_libraries(emu PRIVATE emucore)
+    target_compile_options(emu PRIVATE -O2)
+    target_link_options(emu PRIVATE
+        -O2
+        -sALLOW_MEMORY_GROWTH=1
+        -sINITIAL_MEMORY=536870912
+        -sMODULARIZE=1
+        -sEXPORT_ES6=0
+        -sEXPORT_NAME=createEmu
+        "-sEXPORTED_FUNCTIONS=['_emu_init','_emu_error','_emu_load_snapshot','_emu_run','_emu_status','_emu_frame','_emu_touch','_emu_button','_emu_cycles','_emu_serial_read','_malloc','_free']"
+        "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap','HEAPU8','HEAPU32']"
+    )
+    set_target_properties(emu PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/web/dist"
+    )
+else()
+    add_subdirectory(tools)
+endif()
