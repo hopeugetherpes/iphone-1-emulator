@@ -8,6 +8,33 @@ static uint16_t sum16(const uint8_t *p, unsigned n) {
     return (uint16_t)sum;
 }
 
+static const struct {
+    uint8_t id, len;
+} Z1_PARAMS[] = {
+    { 0x40u, 1u }, { 0x41u, 1u }, { 0x4fu, 1u }, { 0x68u, 1u },
+    { 0x70u, 1u }, { 0xa0u, 1u }, { 0xa3u, 1u }, { 0xa4u, 1u },
+    { 0xa5u, 1u }, { 0xa8u, 1u }, { 0xadu, 1u }, { 0xafu, 1u },
+    { 0xb0u, 1u }, { 0xd7u, 1u },
+    { 0xaeu, 2u },
+    { 0x7fu, 4u }, { 0xb4u, 4u }, { 0xb6u, 4u },
+    { 0xbfu, 4u }, { 0xcbu, 4u },
+    { 0xb1u, 6u }, { 0xb2u, 6u },
+    { 0xabu, 1u }
+};
+
+static bool z1_param(uint8_t id, unsigned *offset, unsigned *len) {
+    unsigned at = 0u;
+    for (unsigned i = 0; i < sizeof Z1_PARAMS / sizeof Z1_PARAMS[0]; i++) {
+        if (Z1_PARAMS[i].id == id) {
+            if (offset) *offset = at;
+            if (len) *len = Z1_PARAMS[i].len;
+            return true;
+        }
+        at += Z1_PARAMS[i].len;
+    }
+    return false;
+}
+
 static void reset_protocol(s5l_mtz1_t *d) {
     d->firmware = false;
     d->stage_b = false;
@@ -15,7 +42,7 @@ static void reset_protocol(s5l_mtz1_t *d) {
     d->atn = false;
     d->atn_pulse = false;
     d->operating_mode = 0;
-    memset(d->input_detect, 0, sizeof d->input_detect);
+    memset(d->params, 0, sizeof d->params);
     d->last_checksum = 0;
     d->b_checksum = 0;
     d->pending_len = 0;
@@ -45,11 +72,16 @@ void s5l_mtz1_reset(s5l_mtz1_t *dev) {
 }
 
 static unsigned z1_report(const s5l_mtz1_t *d, uint8_t id, uint8_t *out) {
-    if (id == 0xbfu) {
-        memcpy(out, d->input_detect, sizeof d->input_detect);
-        return sizeof d->input_detect;
+    unsigned offset, len;
+    unsigned n = s5l_mt_report(&d->geom, id, out);
+    if (n && id != 0xd7u) {
+        if (id == 0xabu) out[0] = d->operating_mode;
+        return n;
     }
-    return s5l_mt_report(&d->geom, id, out);
+    if (!z1_param(id, &offset, &len)) return 0u;
+    memcpy(out, d->params + offset, len);
+    if (id == 0xabu) out[0] = d->operating_mode;
+    return len;
 }
 
 static uint8_t firmware_byte(s5l_mtz1_t *d, unsigned pos,
@@ -135,12 +167,11 @@ static void finish_transaction(s5l_mtz1_t *d) {
             uint8_t id = d->rx[1];
             uint8_t body[MTZ2_REPORT_MAX];
             unsigned n = z1_report(d, id, body);
-            if (n && d->rx_len >= n + 4u) {
-                if (id == 0xabu)
-                    d->operating_mode = d->rx[4];
-                else if (id == 0xbfu)
-                    memcpy(d->input_detect, d->rx + 4u,
-                           sizeof d->input_detect);
+            unsigned offset;
+            if (n && d->rx_len >= n + 4u &&
+                z1_param(id, &offset, 0)) {
+                memcpy(d->params + offset, d->rx + 4u, n);
+                if (id == 0xabu) d->operating_mode = d->rx[4];
             }
         }
         if (op != 0x46u && op != 0x64u && op != 0x65u) {

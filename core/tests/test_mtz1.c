@@ -67,28 +67,51 @@ int main(void) {
           rx[7] == 1u && rx[8] == 0u &&
           rx[9] == 0u && rx[10] == 0xd3u + 27u, "report body/checksum");
 
-    uint8_t detect_info[8] = { 0x8fu, 0xbfu, 0u, 0u, 0u, 0u, 0u, 0u };
-    txn(&s, detect_info, rx, sizeof detect_info);
-    CHECK(rx[0] == 0xaau && rx[4] == 0u && rx[5] == 4u &&
-          rx[6] == 0u && rx[7] == 0xc3u, "input detection report info");
-    uint8_t detect_read[10] = { 0x82u, 0xbfu };
-    txn(&s, detect_read, rx, sizeof detect_read);
-    CHECK(rx[4] == 0u && rx[5] == 0u && rx[6] == 0u && rx[7] == 0u &&
-          rx[8] == 0u && rx[9] == 0xbfu, "input detection report read");
-
-    uint8_t detect_set[10] = { 0x92u, 0xbfu, 0u, 0u, 1u, 2u, 3u, 4u,
-                               0u, 0u };
-    detect_set[8] = 0u;
-    detect_set[9] = 0xc9u;
-    txn(&s, detect_set, rx, sizeof detect_set);
-    CHECK(rx[0] == 0xaau && rx[8] == 0u && rx[9] == 0xc9u &&
-          d.input_detect[0] == 1u && d.input_detect[1] == 2u &&
-          d.input_detect[2] == 3u && d.input_detect[3] == 4u,
-          "set input detection report");
-    txn(&s, detect_read, rx, sizeof detect_read);
-    CHECK(rx[4] == 1u && rx[5] == 2u && rx[6] == 3u && rx[7] == 4u &&
-          rx[8] == 0u && rx[9] == 0xc9u,
-          "read input detection report");
+    static const struct {
+        uint8_t id, len;
+    } params[] = {
+        { 0x40u, 1u }, { 0x41u, 1u }, { 0x4fu, 1u }, { 0x68u, 1u },
+        { 0x70u, 1u }, { 0xa0u, 1u }, { 0xa3u, 1u }, { 0xa4u, 1u },
+        { 0xa5u, 1u }, { 0xa8u, 1u }, { 0xadu, 1u }, { 0xafu, 1u },
+        { 0xb0u, 1u }, { 0xd7u, 1u }, { 0xaeu, 2u },
+        { 0x7fu, 4u }, { 0xb4u, 4u }, { 0xb6u, 4u },
+        { 0xbfu, 4u }, { 0xcbu, 4u }, { 0xb1u, 6u },
+        { 0xb2u, 6u }, { 0xabu, 1u }
+    };
+    uint8_t expected[6];
+    for (unsigned i = 0; i < sizeof params / sizeof params[0]; i++) {
+        uint8_t info[8] = { 0x8fu, 0u, 0u, 0u, 0u, 0u, 0u, 0u };
+        uint8_t set[12] = { 0x92u, 0u };
+        uint8_t get[12] = { 0x82u, 0u };
+        uint16_t pc;
+        info[1] = params[i].id;
+        set[1] = params[i].id;
+        get[1] = params[i].id;
+        for (unsigned j = 0; j < params[i].len; j++) {
+            expected[j] = (uint8_t)(i + j + 1u);
+            set[4u + j] = expected[j];
+        }
+        pc = (uint16_t)(params[i].id + sum(expected, params[i].len));
+        set[4u + params[i].len] = (uint8_t)(pc >> 8);
+        set[5u + params[i].len] = (uint8_t)pc;
+        txn(&s, info, rx, sizeof info);
+        CHECK(rx[0] == 0xaau && rx[4] == 0u &&
+              rx[5] == params[i].len &&
+              rx[6] == 0u &&
+              rx[7] == params[i].id + params[i].len,
+              "parameter report info");
+        txn(&s, set, rx, params[i].len + 6u);
+        CHECK(rx[0] == 0xaau && rx[params[i].len + 4u] ==
+              (uint8_t)(pc >> 8) &&
+              rx[params[i].len + 5u] == (uint8_t)pc,
+              "parameter set checksum");
+        txn(&s, get, rx, params[i].len + 6u);
+        CHECK(rx[0] == 0xaau &&
+              !memcmp(rx + 4u, expected, params[i].len) &&
+              rx[params[i].len + 4u] == (uint8_t)(pc >> 8) &&
+              rx[params[i].len + 5u] == (uint8_t)pc,
+              "parameter readback");
+    }
 
     uint8_t sr[7] = { 0x92u, 0xabu, 0u, 0u, 1u, 0u, 0u };
     uint16_t src = 0xacu;

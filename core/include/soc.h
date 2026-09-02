@@ -3462,6 +3462,7 @@ unsigned s5l_mtz2_encode(const s5l_mtz2_t *dev, const s5l_mt_contact_t *c,
  * 0xa3). See core/src/soc/mtz1.c. */
 #define MTZ1_PIN_SELECT 0x0705u
 #define MTZ1_PIN_POWER  0x0804u
+#define Z1_PARAM_BYTES  49u
 
 typedef struct {
     bool     present, powered, selected, atn, trace;
@@ -3469,7 +3470,7 @@ typedef struct {
     bool     aspeed_stream;
     bool     transaction_overflow;
     uint8_t  operating_mode, seq, last_n;
-    uint8_t  input_detect[4];
+    uint8_t  params[Z1_PARAM_BYTES];
     uint8_t  rx[1024];
     uint32_t pkt_len, rx_len;
     uint16_t last_checksum;
