@@ -115,6 +115,15 @@
     window.setTimeout(() => releaseButton(which), 100);
   }
 
+  function keyButton(event) {
+    const key = event.key.toLowerCase();
+    if (key === "escape" || key === "h") return 1;
+    if (key === "p") return 0;
+    if (event.key === "+" || event.key === "=") return 2;
+    if (event.key === "-" || event.key === "_") return 3;
+    return -1;
+  }
+
   function point(event) {
     const rect = canvas.getBoundingClientRect();
     return {
@@ -153,12 +162,15 @@
   });
   document.addEventListener("keydown", event => {
     if (event.repeat) return;
-    const key = event.key.toLowerCase();
-    if (key === "escape" || key === "h") pressButton(1);
-    else if (key === "p") pressButton(0);
-    else if (event.key === "+" || event.key === "=") pressButton(2);
-    else if (event.key === "-" || event.key === "_") pressButton(3);
-    else return;
+    const which = keyButton(event);
+    if (which < 0) return;
+    callButton(which, true);
+    event.preventDefault();
+  });
+  document.addEventListener("keyup", event => {
+    const which = keyButton(event);
+    if (which < 0) return;
+    callButton(which, false);
     event.preventDefault();
   });
 
