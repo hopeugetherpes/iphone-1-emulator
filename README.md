@@ -44,5 +44,10 @@ The genuine 2007 home screen appears around 5.5G instructions (~3 min host
 time); `--shot-every` writes `run.ppm.<n>.ppm` every N instructions. There is
 no input yet, so SpringBoard eventually auto-locks and turns the display off.
 
+The harness also supports repeatable `--pc-log ADDR` targets for logging
+registers and readable argument buffers at selected guest PCs, as well as
+`--at STEP tap X Y`, `--at STEP touch down|move|up X Y`, and
+`--at STEP press NAME` for scripted input.
+
 Keep firmware outside the tree (the `.gitignore` also excludes the usual
 extensions).

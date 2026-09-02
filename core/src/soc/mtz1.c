@@ -361,7 +361,7 @@ bool s5l_mtz1_set_contacts(s5l_mtz1_t *d, const s5l_mt_contact_t *c,
                            unsigned n) {
     s5l_mt_contact_t lifted[MTZ2_CONTACT_MAX];
     unsigned len;
-    if (!d || !d->firmware || !d->operating_mode || d->pending_len) return false;
+    if (!d || !d->firmware || d->pending_len) return false;
     if (!n) {
         n = d->last_n;
         if (!n) return false;

@@ -75,6 +75,8 @@ static bool g_break_hit;
 static bool break_hook(void *ctx) { (void)ctx; g_break_hit=true; return false; }
 /* --watch-pc: log every hit of up to 15 PCs without stopping. */
 static uint32_t g_watch[S5L_PRE_STEP_TARGET_MAX]; static unsigned g_watch_n;
+#define PC_LOG_MAX 8u
+static uint32_t g_pc_log[PC_LOG_MAX]; static unsigned g_pc_log_n;
 static uint32_t g_break_pc; static const s5l8900_t *g_watch_m;
 static uint32_t g_exec_pc, g_swi_pc; static FILE *g_swi_log;
 static int g_break_swi; static bool g_break_swi_set; static uint32_t g_break_swi_ttbr0;
@@ -88,8 +90,37 @@ static void print_va_str(FILE *o, s5l8900_t *m, uint32_t va) {
     for (unsigned i=0;i<256;i+=4) { uint32_t w; if (!read_va32(m,va+i,&w)) { fputc('?',o); return; }
         for (unsigned b=0;b<4;b++) { char c=(char)(w>>(8*b)); if (!c) return; fputc(c,o); } }
 }
+static bool print_va_bytes(s5l8900_t *m, uint32_t va, unsigned len,
+                           const char *name) {
+    uint8_t bytes[48];
+    unsigned n = len > sizeof bytes ? sizeof bytes : len;
+    for (unsigned i = 0u; i < n; i += 4u) {
+        uint32_t word;
+        if (!read_va32(m, va + i, &word)) return false;
+        for (unsigned b = 0u; b < 4u && i + b < n; b++)
+            bytes[i + b] = (uint8_t)(word >> (8u * b));
+    }
+    printf(" [%s]=", name);
+    for (unsigned i = 0u; i < n; i++) printf("%02x", bytes[i]);
+    return true;
+}
+static void print_pc_log(s5l8900_t *m, uint32_t pc) {
+    bool match = false;
+    for (unsigned i = 0u; i < g_pc_log_n; i++)
+        if (g_pc_log[i] == pc) match = true;
+    if (!match) return;
+    printf("PCLOG cyc=%llu pc=%08x ttbr0=%08x r0..r3=%08x %08x %08x %08x",
+           (unsigned long long)m->cpu.cycles, pc, m->cpu.cp15.ttbr0,
+           m->cpu.r[0], m->cpu.r[1], m->cpu.r[2], m->cpu.r[3]);
+    unsigned len0 = m->cpu.r[1] <= 0x200u ? m->cpu.r[1] : 0u;
+    unsigned len1 = m->cpu.r[2] <= 0x200u ? m->cpu.r[2] : 0u;
+    if (len0) print_va_bytes(m, m->cpu.r[0], len0, "r0");
+    if (len1) print_va_bytes(m, m->cpu.r[1], len1, "r1");
+    puts("");
+}
 static bool watch_hook(void *ctx) {
     (void)ctx; s5l8900_t *m=(s5l8900_t*)g_watch_m; uint32_t pc=m->cpu.r[15]&~1u;
+    print_pc_log(m, pc);
     if (g_break_pc && pc==g_break_pc) { g_break_hit=true; return false; }
     if (g_exec_pc && pc==g_exec_pc) {
         /* XNU execve(proc, uap, retval): uap->fname is a user_addr_t whose
@@ -292,6 +323,16 @@ int main(int argc,char **argv) {
             g_swi_log=fopen(argv[++i],"w"); if (!g_swi_log) { perror("--swi-log"); return 1; } }
         else if (!strcmp(argv[i],"--exec-pc")&&i+1<argc&&g_watch_n<S5L_PRE_STEP_TARGET_MAX-1u)
             g_watch[g_watch_n++]=g_exec_pc=(uint32_t)strtoul(argv[++i],NULL,0)&~1u;
+        else if (!strcmp(argv[i],"--pc-log")&&i+1<argc) {
+            if (g_pc_log_n >= PC_LOG_MAX ||
+                g_watch_n >= S5L_PRE_STEP_TARGET_MAX - 1u) {
+                fprintf(stderr, "too many --pc-log targets\n");
+                return 2;
+            }
+            g_pc_log[g_pc_log_n++] =
+                (uint32_t)strtoul(argv[++i],NULL,0)&~1u;
+            g_watch[g_watch_n++] = g_pc_log[g_pc_log_n - 1u];
+        }
         else if (!strcmp(argv[i],"--break-swi")&&i+2<argc) { g_break_swi_set=true;
             g_break_swi=(int)strtol(argv[++i],NULL,0); g_break_swi_ttbr0=(uint32_t)strtoul(argv[++i],NULL,0); }
         else if (!strcmp(argv[i],"--dump-va")&&i+1<argc&&dump_n<8) dump[dump_n++]=(uint32_t)strtoul(argv[++i],NULL,0);

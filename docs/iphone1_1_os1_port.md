@@ -239,8 +239,11 @@ time for 12G instructions.
   `d0` interface version, `8f` report information, `82` report data and `92`
   set-report. Result-length reads use `aa L_hi L_lo checksum_hi checksum_lo`;
   result-data reads return a `0xcc` path frame followed by its big-endian
-  payload checksum. Reports `d1`, `d3`, `d7`, `d9`, `d0`, `a1` and `ab` share
-  MTZ2's 15-row, 10-column, 4800x7200 geometry. Attention is GPIOIC line 163.
+  payload checksum. Reports `d1`, `d3`, `d7`, `d9`, `d0`, and `a1` share MTZ2's
+  15-row, 10-column, 4800x7200 geometry. Z1 Zephyr parameters use the
+  table-backed reports listed in `core/src/soc/mtz1.c`; the 1A543a init sequence
+  ends with `0xbf` and `0xaf` set-reports and does not write `0xab`. Attention
+  is GPIOIC line 163.
 
 ## 8. Workarounds currently in force (each is a substitution for hardware we
 have not modeled yet, not a firmware patch)
@@ -300,7 +303,7 @@ per-device state, not an Apple binary.
 
 ## 10. Diagnostics and input in the harness
 
-`--trace-devices`, `--break-pc`, `--watch-pc`, `--trace-from/--trace-last`
+`--trace-devices`, `--break-pc`, `--watch-pc`, `--pc-log`, `--trace-from/--trace-last`
 (cycle-based, 2M-entry ring of `pc/cpsr/r0-r3/lr/sp`), `--exec-pc` (prints every
 `_execve` path), `--swi-log` (Darwin/Mach syscall log with decoded paths),
 `--dump-va`, `--unmatch`, `--break-swi SYSCALL TTBR0`, `--shot-every N`
