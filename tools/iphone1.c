@@ -112,10 +112,8 @@ static void print_pc_log(s5l8900_t *m, uint32_t pc) {
     printf("PCLOG cyc=%llu pc=%08x ttbr0=%08x r0..r3=%08x %08x %08x %08x",
            (unsigned long long)m->cpu.cycles, pc, m->cpu.cp15.ttbr0,
            m->cpu.r[0], m->cpu.r[1], m->cpu.r[2], m->cpu.r[3]);
-    unsigned len0 = m->cpu.r[1] <= 0x200u ? m->cpu.r[1] : 0u;
-    unsigned len1 = m->cpu.r[2] <= 0x200u ? m->cpu.r[2] : 0u;
-    if (len0) print_va_bytes(m, m->cpu.r[0], len0, "r0");
-    if (len1) print_va_bytes(m, m->cpu.r[1], len1, "r1");
+    print_va_bytes(m, m->cpu.r[0], sizeof (uint8_t[48]), "r0");
+    print_va_bytes(m, m->cpu.r[1], sizeof (uint8_t[48]), "r1");
     puts("");
 }
 static bool watch_hook(void *ctx) {
