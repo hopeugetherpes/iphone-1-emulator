@@ -204,9 +204,10 @@ SNAP_SIZE_GUARD(s5l_stub_t,        56,    "snap_stubs");
  * v35 adds the Z1 controller protocol state, pending frame and geometry after
  * the existing machine touch state. Transaction receive bytes are transient:
  * restore resumes between transactions, while the protocol and queued frame
- * state remain serialized. */
-SNAP_SIZE_GUARD(s5l_mtz1_t,        1400,   "snap_mtz1");
-SNAP_SIZE_GUARD(s5l8900_t,         127368, "snap_mach");
+ * state remain serialized.
+ * v36 adds the Z1 input-detection control report state. */
+SNAP_SIZE_GUARD(s5l_mtz1_t,        1408,   "snap_mtz1");
+SNAP_SIZE_GUARD(s5l8900_t,         127376, "snap_mach");
 #endif
 
 /* ---------------------------------------------------------------- the IO --- */
@@ -654,6 +655,7 @@ static void snap_mtz1(sn_io_t *io, s5l_mtz1_t *d) {
     FB(d->firmware); FB(d->stage_b); FB(d->check_seen); FB(d->atn_pulse);
     FB(d->raw_stream); FB(d->aspeed_stream); FB(d->transaction_overflow);
     F8(d->operating_mode); F8(d->seq); F8(d->last_n);
+    FBYTES(d->input_detect, sizeof d->input_detect);
     F32(d->pkt_len); F32(d->rx_len); F16(d->last_checksum);
     F32(d->b_checksum);
     F64(d->octets); F64(d->aspeed_bytes); F64(d->bspeed_bytes);

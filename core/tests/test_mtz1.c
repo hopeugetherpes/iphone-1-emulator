@@ -67,6 +67,29 @@ int main(void) {
           rx[7] == 1u && rx[8] == 0u &&
           rx[9] == 0u && rx[10] == 0xd3u + 27u, "report body/checksum");
 
+    uint8_t detect_info[8] = { 0x8fu, 0xbfu, 0u, 0u, 0u, 0u, 0u, 0u };
+    txn(&s, detect_info, rx, sizeof detect_info);
+    CHECK(rx[0] == 0xaau && rx[4] == 0u && rx[5] == 4u &&
+          rx[6] == 0u && rx[7] == 0xc3u, "input detection report info");
+    uint8_t detect_read[10] = { 0x82u, 0xbfu };
+    txn(&s, detect_read, rx, sizeof detect_read);
+    CHECK(rx[4] == 0u && rx[5] == 0u && rx[6] == 0u && rx[7] == 0u &&
+          rx[8] == 0u && rx[9] == 0xbfu, "input detection report read");
+
+    uint8_t detect_set[10] = { 0x92u, 0xbfu, 0u, 0u, 1u, 2u, 3u, 4u,
+                               0u, 0u };
+    detect_set[8] = 0u;
+    detect_set[9] = 0xc9u;
+    txn(&s, detect_set, rx, sizeof detect_set);
+    CHECK(rx[0] == 0xaau && rx[8] == 0u && rx[9] == 0xc9u &&
+          d.input_detect[0] == 1u && d.input_detect[1] == 2u &&
+          d.input_detect[2] == 3u && d.input_detect[3] == 4u,
+          "set input detection report");
+    txn(&s, detect_read, rx, sizeof detect_read);
+    CHECK(rx[4] == 1u && rx[5] == 2u && rx[6] == 3u && rx[7] == 4u &&
+          rx[8] == 0u && rx[9] == 0xc9u,
+          "read input detection report");
+
     uint8_t sr[7] = { 0x92u, 0xabu, 0u, 0u, 1u, 0u, 0u };
     uint16_t src = 0xacu;
     sr[5] = (uint8_t)(src >> 8);

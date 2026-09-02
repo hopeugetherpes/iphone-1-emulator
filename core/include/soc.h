@@ -3469,6 +3469,7 @@ typedef struct {
     bool     aspeed_stream;
     bool     transaction_overflow;
     uint8_t  operating_mode, seq, last_n;
+    uint8_t  input_detect[4];
     uint8_t  rx[1024];
     uint32_t pkt_len, rx_len;
     uint16_t last_checksum;

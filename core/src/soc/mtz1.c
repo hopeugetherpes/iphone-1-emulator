@@ -15,6 +15,7 @@ static void reset_protocol(s5l_mtz1_t *d) {
     d->atn = false;
     d->atn_pulse = false;
     d->operating_mode = 0;
+    memset(d->input_detect, 0, sizeof d->input_detect);
     d->last_checksum = 0;
     d->b_checksum = 0;
     d->pending_len = 0;
@@ -43,6 +44,14 @@ void s5l_mtz1_reset(s5l_mtz1_t *dev) {
     reset_protocol(dev);
 }
 
+static unsigned z1_report(const s5l_mtz1_t *d, uint8_t id, uint8_t *out) {
+    if (id == 0xbfu) {
+        memcpy(out, d->input_detect, sizeof d->input_detect);
+        return sizeof d->input_detect;
+    }
+    return s5l_mt_report(&d->geom, id, out);
+}
+
 static uint8_t firmware_byte(s5l_mtz1_t *d, unsigned pos,
                              uint8_t out) {
     uint8_t id = d->rx_len > 1u ? d->rx[1] : 0u;
@@ -54,7 +63,7 @@ static uint8_t firmware_byte(s5l_mtz1_t *d, unsigned pos,
     case 0xd0u:
         return pos == 1u ? 1u : pos == 2u ? 2u : 0u;
     case 0x8fu:
-        n = s5l_mt_report(&d->geom, id, body);
+        n = z1_report(d, id, body);
         if (!n) d->report_unknown++;
         if (pos == 4u) return n ? (uint8_t)(n >> 8) : 0x10u;
         if (pos == 5u) return (uint8_t)n;
@@ -64,7 +73,7 @@ static uint8_t firmware_byte(s5l_mtz1_t *d, unsigned pos,
                                         (n ? n >> 8 : 0x10u) + n);
         return 0u;
     case 0x82u:
-        n = s5l_mt_report(&d->geom, id, body);
+        n = z1_report(d, id, body);
         if (!n) d->report_unknown++;
         if (id == 0xabu && n) body[0] = d->operating_mode;
         if (pos >= 4u && pos < n + 4u) return body[pos - 4u];
@@ -74,16 +83,10 @@ static uint8_t firmware_byte(s5l_mtz1_t *d, unsigned pos,
         }
         return 0u;
     case 0x92u:
-        /* The currently supported set-report is the one-byte operating mode. */
-        if (pos == 5u) {
-            uint16_t ck = (uint16_t)(id + sum16(d->rx + 4u,
-                                                1u));
-            return (uint8_t)(ck >> 8);
-        }
-        if (pos == 6u) {
-            uint16_t ck = (uint16_t)(id + sum16(d->rx + 4u,
-                                                1u));
-            return (uint8_t)ck;
+        n = z1_report(d, id, body);
+        if (n && (pos == n + 4u || pos == n + 5u)) {
+            uint16_t ck = (uint16_t)(id + sum16(d->rx + 4u, n));
+            return pos == n + 4u ? (uint8_t)(ck >> 8) : (uint8_t)ck;
         }
         return 0u;
     case 0x46u:
@@ -128,8 +131,18 @@ static void finish_transaction(s5l_mtz1_t *d) {
     uint8_t op = d->rx_len ? d->rx[0] : 0u;
     d->transactions++;
     if (d->firmware) {
-        if (op == 0x92u && d->rx_len >= 5u && d->rx[1] == 0xabu)
-            d->operating_mode = d->rx[4];
+        if (op == 0x92u && d->rx_len >= 5u) {
+            uint8_t id = d->rx[1];
+            uint8_t body[MTZ2_REPORT_MAX];
+            unsigned n = z1_report(d, id, body);
+            if (n && d->rx_len >= n + 4u) {
+                if (id == 0xabu)
+                    d->operating_mode = d->rx[4];
+                else if (id == 0xbfu)
+                    memcpy(d->input_detect, d->rx + 4u,
+                           sizeof d->input_detect);
+            }
+        }
         if (op != 0x46u && op != 0x64u && op != 0x65u) {
             if (d->pending_len) {
                 d->pending_len = 0u;
