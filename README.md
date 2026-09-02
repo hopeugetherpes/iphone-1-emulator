@@ -20,12 +20,14 @@ python3 tools/firmware/extract_1a543a.py iPhone1,1_1.0_1A543a_Restore.ipsw fw/ -
 python3 tools/firmware/rootfs_work.py fw/rootfs_1A543a_hfs.img fw/work_1A543a.img \
     --fstab "/dev/md0 / hfs rw 0 1" \
     --launchd-env com.apple.SpringBoard.plist=LK_ENABLE_MBX2D=0,LK_ENABLE_OGL=0 \
-    --add /var/root/Library/Lockdown/data_ark.plist=tools/firmware/data_ark_activated.plist
+    --add /var/root/Library/Lockdown/data_ark.plist=tools/firmware/data_ark_activated.plist \
+    --no-autolock
 ```
 
-The last option seeds `lockdownd`'s cached activation state so SpringBoard goes
-to the home screen instead of "Activate iPhone" (no Apple binary is modified;
-the extracted image is copied, never changed).
+The `--add` option seeds `lockdownd`'s cached activation state so SpringBoard
+goes to the home screen instead of "Activate iPhone"; `--no-autolock` seeds
+the SpringBoard idle-time preferences. No Apple binary is modified; the
+extracted image is copied, never changed.
 
 ## Build and run
 
@@ -49,7 +51,13 @@ registers and readable argument buffers at selected guest PCs, as well as
 `--at STEP tap X Y`, `--at STEP touch down|move|up X Y`, and
 `--at STEP press NAME` for scripted input.
 `tap` schedules its automatic lift after 100 ms of guest time. Explicit
-`touch down|move|up` events remain step-scheduled.
+`touch down|move|up` events remain step-scheduled. `press NAME` holds the
+button for 100 ms of guest time before releasing it.
+
+For long idle experiments, `rootfs_work.py --no-autolock` seeds
+`SBAutoLockTime` and `SBAutoDimTime` as integer `-1` in SpringBoard's
+preferences. This is a user-preference change in the work image, not an Apple
+binary patch.
 
 Keep firmware outside the tree (the `.gitignore` also excludes the usual
 extensions).

@@ -12,6 +12,7 @@ Usage:
       [--replace NAME=HOSTFILE]...     replace file NAME (catalog leaf name)
       [--launchd-env NAME=K=V,...]     add EnvironmentVariables to a launchd
                                        plist NAME (binary plist rewritten)
+      [--no-autolock]                 set SpringBoard auto-lock and dim to Never
       [--add GUEST_PATH=HOSTFILE]...  add a new file, creating directories
 """
 import os
@@ -328,6 +329,11 @@ class Work:
         self._write_vh_u32(64, self.next_catalog_id)
 
     def add_file(self, guest_path, host_path):
+        with open(host_path, "rb") as f:
+            data = f.read()
+        self.add_file_data(guest_path, data)
+
+    def add_file_data(self, guest_path, data):
         components = [x for x in guest_path.split("/") if x]
         if not guest_path.startswith("/") or not components:
             raise SystemExit("--add guest path must be absolute: %s" % guest_path)
@@ -343,10 +349,28 @@ class Work:
         name = components[-1]
         if self._find_record(parent, name):
             raise SystemExit("%s already exists" % guest_path)
-        with open(host_path, "rb") as f:
-            data = f.read()
         self._new_file(parent, name, data)
         print("%s: added %d bytes" % (guest_path, len(data)))
+
+    def find_file_path(self, guest_path):
+        components = [x for x in guest_path.split("/") if x]
+        if not guest_path.startswith("/") or not components:
+            raise SystemExit("file path must be absolute: %s" % guest_path)
+        parent = 2
+        for component in components[:-1]:
+            parent = self._resolve_path(component, parent)
+            if parent is None:
+                return None
+        for node_index, node in self._leaf_chain():
+            for off, _, raw in self._leaf_records(node):
+                record = H.parse_record(raw)
+                if (record and record[0] == parent and
+                        record[1] == components[-1] and record[2] == 2):
+                    fork = H.Fork(raw, record[3] + 88)
+                    fork_off = (node_index * self.node_size + off +
+                                record[3] + 88)
+                    return (fork, fork_off, parent, components[-1])
+        return None
 
     def find_file(self, needle):
         hits = []
@@ -371,12 +395,29 @@ class Work:
             raise SystemExit("%r: %d catalog hits (need exactly 1)" % (needle, len(hits)))
         return hits[0]
 
+    def read_file_path(self, guest_path):
+        hit = self.find_file_path(guest_path)
+        if not hit:
+            raise SystemExit("%s: file not found" % guest_path)
+        fork, _, _, _ = hit
+        return self.vol.read_fork(fork)
+
     def read_file(self, name):
         _, fork = self.find_file(name)
         return self.vol.read_fork(fork)
 
     def replace_file(self, name, data):
         fork_off, fork = self.find_file(name)
+        self._replace_fork(name, fork_off, fork, data)
+
+    def replace_file_path(self, guest_path, data):
+        hit = self.find_file_path(guest_path)
+        if not hit:
+            raise SystemExit("%s: file not found" % guest_path)
+        fork, fork_off, _, _ = hit
+        self._replace_fork(guest_path, fork_off, fork, data)
+
+    def _replace_fork(self, name, fork_off, fork, data):
         cap = fork.total_blocks * self.bs
         if len(data) > cap:
             raise SystemExit("%s: %d bytes exceed the %d bytes the file's blocks hold"
@@ -407,6 +448,7 @@ def main():
     shutil.copyfile(src, dst)
     w = Work(dst)
     i = 2
+    no_autolock = False
     while i < len(a):
         if a[i] == "--fstab":
             line = a[i + 1]
@@ -425,12 +467,30 @@ def main():
                 env[k] = v
             w.replace_file(name, plistlib.dumps(pl, fmt=plistlib.FMT_BINARY))
             i += 2
+        elif a[i] == "--no-autolock":
+            no_autolock = True
+            i += 1
         elif a[i] == "--add":
             guest, host = a[i + 1].split("=", 1)
             w.add_file(guest, host)
             i += 2
         else:
             raise SystemExit("unknown option %r" % a[i])
+    if no_autolock:
+        path = "/var/root/Library/Preferences/com.apple.springboard.plist"
+        existing = w.find_file_path(path)
+        if existing:
+            fork, _, _, _ = existing
+            pl = plistlib.loads(w.vol.read_fork(fork))
+        else:
+            pl = {}
+        pl["SBAutoLockTime"] = -1
+        pl["SBAutoDimTime"] = -1
+        data = plistlib.dumps(pl, fmt=plistlib.FMT_XML)
+        if existing:
+            w.replace_file_path(path, data)
+        else:
+            w.add_file_data(path, data)
 
 
 if __name__ == "__main__":

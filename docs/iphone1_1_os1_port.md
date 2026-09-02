@@ -255,6 +255,23 @@ time for 12G instructions.
   observations came from MultitouchSupport PCs `0x3130e07c` and `0x3130e12c`.
   Attention is GPIOIC line 163.
 
+  Alert dismissal is proven with a contact at `(160,315)`; Settings and Safari
+  launch from their corresponding SpringBoard icons. The Home-button path was
+  traced through SpringBoard's `0x3cc40` dispatch table: type 3 reaches
+  `0x3bbe0`, while type 10 digitizer input reaches `0x3ccc4`. The Menu event
+  uses HID consumer page `0x0c`, usage `0x40`; Power is `0x30`, and volume uses
+  `0xe9`/`0xea`. SpringBoard's byte at `0x8d69` records the display-dimmed
+  state, set by `setDimmed:`/the dim timer and cleared at `0x928c`. While
+  dimmed, Menu is consumed by
+  `performSelectorOnMainThread:@selector(userEventOccurred:)` at `0x3be18`
+  to undim; otherwise it follows the `0x3e8`/`0x3e9` menu down/up GSEvent path
+  at `0x3bd4c`. With the original idle timing, the device auto-locked during
+  long experiments, so the first Menu press only undimmed and a later press
+  reached the lock screen. The work-image `--no-autolock` option seeds
+  `SBAutoLockTime` and `SBAutoDimTime` to integer `-1`; this is a user
+  preference, not a binary patch, and can be dropped once real-time speed
+  makes the idle timer a non-issue.
+
 ## 8. Workarounds currently in force (each is a substitution for hardware we
 have not modeled yet, not a firmware patch)
 
@@ -332,8 +349,9 @@ Repeatable host input is available without a UI frontend:
 
 `NAME` is one of `hold`, `menu`, `volup`, `voldown` and `ringerab`. Every
 injected event is printed to stderr. `tap` sends contact 1 down and schedules
-an automatic lift 200000 instructions later; `press` releases the button
-300000 instructions later. Touch events call the machine-level API and use the
+an automatic lift after 100 ms of guest time; `press` releases the button
+after the same guest-time interval. Explicit touch and button down/up events
+remain step-scheduled. Touch events call the machine-level API and use the
 same coordinate conversion as MTZ2.
 
 Snapshots preserve the guest CPU instruction count and device state:

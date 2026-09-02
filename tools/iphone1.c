@@ -116,6 +116,7 @@ static void print_pc_log(s5l8900_t *m, uint32_t pc) {
            m->cpu.r[12], m->cpu.r[14]);
     print_va_bytes(m, m->cpu.r[0], sizeof (uint8_t[48]), "r0");
     print_va_bytes(m, m->cpu.r[1], sizeof (uint8_t[48]), "r1");
+    print_va_bytes(m, pc, sizeof (uint8_t[16]), "pc");
     puts("");
 }
 static bool watch_hook(void *ctx) {
@@ -293,13 +294,7 @@ int main(int argc,char **argv) {
                 }
                 e.kind = INPUT_BUTTON;
                 e.pressed = true;
-                events[event_n++] = e;
-                if (event_n >= sizeof events / sizeof events[0]) {
-                    fprintf(stderr, "too many --at events\n");
-                    return 2;
-                }
-                e.step += 300000u;
-                e.pressed = false;
+                e.auto_lift = true;
                 events[event_n++] = e;
             } else {
                 usage();
@@ -376,8 +371,9 @@ int main(int argc,char **argv) {
     tap_t t={serial?fopen(serial,"wb"):NULL,&m,true}; s5l8900_set_uart0_host(&m,tap,&t);
     arm_status_t st=ARM_OK; uint64_t total=m.cpu.cycles; uint32_t ring[32]={0}; unsigned ri=0, same=0;
     unsigned next_event = 0; bool saved = false;
-    bool tap_pending = false;
-    uint64_t tap_down_ticks = 0;
+    bool tap_pending = false, press_pending = false;
+    uint64_t tap_down_ticks = 0, press_down_ticks = 0;
+    unsigned press_button = 0;
     const uint64_t tap_duration_ticks = m.tb_hz ? m.tb_hz / 10u : 600000u;
     uint32_t last_window=0; const char *reason="steps exhausted";
     if (g_watch_n) { g_watch_m=&m; g_break_pc=break_pc&~1u;
@@ -402,6 +398,15 @@ int main(int argc,char **argv) {
             tap_pending = false;
             continue;
         }
+        if (press_pending &&
+            m.timer.ticks - press_down_ticks >= tap_duration_ticks) {
+            bool ok = s5l8900_set_button(&m, press_button, false);
+            fprintf(stderr, "input step=%llu button %u up -> %s\n",
+                    (unsigned long long)total, press_button,
+                    ok ? "accepted" : "rejected");
+            press_pending = false;
+            continue;
+        }
         unsigned slice=(unsigned)((steps-total)>1000000ull?1000000ull:steps-total);
         if (next_event < event_n && events[next_event].step <= total) {
             input_event_t *e = &events[next_event++];
@@ -423,6 +428,11 @@ int main(int argc,char **argv) {
                 bool ok = s5l8900_set_button(&m, e->button, e->pressed);
                 fprintf(stderr, "button %u %s -> %s\n", e->button,
                         e->pressed ? "down" : "up", ok ? "accepted" : "rejected");
+                if (ok && e->auto_lift) {
+                    press_pending = true;
+                    press_button = e->button;
+                    press_down_ticks = m.timer.ticks;
+                }
             }
             continue;
         }
