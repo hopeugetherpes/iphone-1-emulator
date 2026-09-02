@@ -23,7 +23,7 @@
   let downloadReceived = 0;
   let downloadTotal = 0;
   const queryCpi = Number.parseInt(new URLSearchParams(location.search).get("cpi"), 10);
-  const cpi = Number.isInteger(queryCpi) && queryCpi >= 1 && queryCpi <= 16 ? queryCpi : 2;
+  const cpi = Number.isInteger(queryCpi) && queryCpi >= 1 && queryCpi <= 16 ? queryCpi : 1;
 
   const setStatus = text => { status.textContent = text; };
   const fail = (message, error) => {

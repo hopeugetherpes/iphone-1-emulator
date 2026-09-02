@@ -217,13 +217,20 @@ time for 12G instructions.
 `--cpi` and the WebAssembly `emu_set_cpi` API model the average ARM1176 cycles
 per retired instruction. They leave the guest wall clock (the 6 MHz timebase)
 unchanged and only change how many instructions fit in a guest second; this is
-a timing-model parameter, not a guest modification. Native defaults to 1 and
-the web frontend defaults to 2. Observed timings are:
+a timing-model parameter, not a guest modification. Both defaults are 1; the
+web frontend accepts `?cpi=N` (1..16).
 
-* cold boot at CPI 1: home screen at 7.0G steps in 198 s;
-* cold boot at CPI 2: home screen by approximately 3.5G steps;
-* snapshot tap → Settings → Home: 52 s / 29 s / 18 s host time at CPI 1 / 2 /
-  4, with identical screens.
+What it does and does not buy: the guest is only time-starved while it is
+CPU-saturated. In steady state the guest does a fixed amount of work per guest
+second and WFI jumps straight to the next timer edge, so guest time advances at
+`host_instr_per_s / work_per_guest_s` regardless of CPI — measured with the
+guest's own Stopwatch in Chrome: 0.74x real time at CPI 1 vs 0.65x at CPI 2
+(the extra timer traffic costs ~13% host throughput). App launches are
+host-CPU-bound and take the same host time at either setting. CPI only
+shortens saturated, timeout-bound phases in guest time: cold boot reaches the
+home screen at 7.0G steps (198 s) at CPI 1 and by ~3.5G steps at CPI 2, and the
+tap → Settings → Home sequence renders identical screens at CPI 1/2/4. Host
+responsiveness therefore has to come from interpreter speed, not from CPI.
 
 ## 7. Hardware behaviour implemented for this target
 
