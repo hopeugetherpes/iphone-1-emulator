@@ -136,6 +136,8 @@ int main(void) {
     CHECK(rx[0] == 0xaau && rx[1] == 0u && rx[2] == 0u &&
           rx[3] == 0u && rx[4] == 0u, "idle length");
 
+    s5l_mtz1_tick(&d, MTZ1_FRAME_TICKS * 10u + 1u);
+    CHECK(d.tick_acc == 0u, "idle ticks do not accumulate");
     CHECK(s5l_mtz1_set_contacts(&d, &c, 1u), "queue contact");
     txn(&s, lr, rx, sizeof lr);
     unsigned l = rx[1] << 8 | rx[2];
@@ -156,7 +158,9 @@ int main(void) {
     CHECK(frame_ms(rx) == 0u && d.frame_ms == 10u,
           "initial touch timestamp");
 
-    s5l_mtz1_tick(&d, MTZ1_FRAME_TICKS);
+    s5l_mtz1_tick(&d, MTZ1_FRAME_TICKS - 1u);
+    CHECK(!d.atn, "touching waits for a full period");
+    s5l_mtz1_tick(&d, 1u);
     txn(&s, lr, rx, sizeof lr);
     CHECK((rx[1] << 8 | rx[2]) == 44u && d.atn,
           "touching frame queued");

@@ -420,22 +420,23 @@ static bool queue_held_frame(s5l_mtz1_t *d, uint8_t phase,
 
 void s5l_mtz1_tick(s5l_mtz1_t *d, uint32_t tb_ticks) {
     if (!d) return;
-    if (!d->firmware) {
+    if (!d->firmware || (!d->held_n && !d->lift_pending)) {
         d->tick_acc = 0u;
         return;
     }
     uint64_t total = (uint64_t)d->tick_acc + tb_ticks;
-    while (total >= MTZ1_FRAME_TICKS) {
-        total -= MTZ1_FRAME_TICKS;
-        if (d->pending_len) continue;
-        if (d->lift_pending) {
-            if (queue_held_frame(d, MTZ2_PHASE_BREAK_TOUCH, true)) {
-                d->held_n = 0u;
-                d->lift_pending = false;
-            }
-        } else if (d->held_n) {
-            (void)queue_held_frame(d, MTZ2_PHASE_TOUCHING, false);
-        }
+    if (total < MTZ1_FRAME_TICKS) {
+        d->tick_acc = (uint32_t)total;
+        return;
     }
-    d->tick_acc = (uint32_t)total;
+    d->tick_acc = 0u;
+    if (d->pending_len) return;
+    if (d->lift_pending) {
+        if (queue_held_frame(d, MTZ2_PHASE_BREAK_TOUCH, true)) {
+            d->held_n = 0u;
+            d->lift_pending = false;
+        }
+    } else if (d->held_n) {
+        (void)queue_held_frame(d, MTZ2_PHASE_TOUCHING, false);
+    }
 }
