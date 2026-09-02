@@ -9,15 +9,24 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
 endif()
 
+option(IPHONE1_WEB "Build the Emscripten browser frontend" OFF)
+if(NOT IPHONE1_WEB)
+    set(CMAKE_C_FLAGS_RELEASE "-O3 -DNDEBUG" CACHE STRING "" FORCE)
+    include(CheckIPOSupported)
+    check_ipo_supported(RESULT ipo_supported OUTPUT ipo_error LANGUAGES C)
+    if(ipo_supported)
+        set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
+    endif()
+endif()
+
 enable_testing()
 add_subdirectory(core)
-option(IPHONE1_WEB "Build the Emscripten browser frontend" OFF)
 if(IPHONE1_WEB)
     add_executable(emu web/emu_api.c)
     target_link_libraries(emu PRIVATE emucore)
-    target_compile_options(emu PRIVATE -O2)
+    target_compile_options(emu PRIVATE -O3)
     target_link_options(emu PRIVATE
-        -O2
+        -O3
         -sALLOW_MEMORY_GROWTH=1
         -sINITIAL_MEMORY=536870912
         -sMODULARIZE=1
