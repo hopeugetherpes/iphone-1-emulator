@@ -3368,6 +3368,8 @@ void     s5l_mtz2_power_pin(void *ctx, bool level);
 #define MTZ2_FRAME_TYPE     0xccu
 #define MTZ2_FRAME_HEADER   10u
 #define MTZ2_CONTACT_STRIDE 32u
+#define MTZ1_FRAME_TYPE     0xceu
+#define MTZ1_FRAME_HEADER   16u
 /*
  * Milliseconds the device advances its frame timestamp by per report. This
  * device has no time base of its own; the timestamp exists because
@@ -3427,6 +3429,9 @@ unsigned s5l_mt_report(const s5l_mt_geom_t *, uint8_t id, uint8_t *out);
 unsigned s5l_mt_frame_encode(const s5l_mt_geom_t *,
                              const s5l_mt_contact_t *, unsigned n,
                              uint8_t seq, uint32_t ms, uint8_t *out);
+unsigned s5l_mt_frame_encode_ce(const s5l_mt_geom_t *,
+                                const s5l_mt_contact_t *, unsigned n,
+                                uint8_t seq, uint32_t ms, uint8_t *out);
 
 /*
  * Queue one report. Returns FALSE — and queues nothing — when the device is in

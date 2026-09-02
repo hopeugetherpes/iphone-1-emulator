@@ -238,12 +238,15 @@ time for 12G instructions.
   `c4` firmware transition. Firmware mode uses full-duplex `aa` replies for
   `d0` interface version, `8f` report information, `82` report data and `92`
   set-report. Result-length reads use `aa L_hi L_lo checksum_hi checksum_lo`;
-  result-data reads return a `0xcc` path frame followed by its big-endian
-  payload checksum. Reports `d1`, `d3`, `d7`, `d9`, `d0`, and `a1` share MTZ2's
-  15-row, 10-column, 4800x7200 geometry. Z1 Zephyr parameters use the
-  table-backed reports listed in `core/src/soc/mtz1.c`; the 1A543a init sequence
-  ends with `0xbf` and `0xaf` set-reports and does not write `0xab`. Attention
-  is GPIOIC line 163.
+  result-data reads return a path frame followed by its big-endian payload
+  checksum. Z1 input frames use type `0xce`, with a 16-byte header and 16-bit
+  contact coordinates plus density/total fields. The 1A543a parser's `0xcc`
+  path route hard-codes contact density to zero, so a `0xcc` frame can never
+  pass the make/break density threshold and register a touch. Reports `d1`,
+  `d3`, `d7`, `d9`, `d0`, and `a1` share MTZ2's 15-row, 10-column, 4800x7200
+  geometry. Z1 Zephyr parameters use the table-backed reports listed in
+  `core/src/soc/mtz1.c`; the 1A543a init sequence ends with `0xbf` and `0xaf`
+  set-reports and does not write `0xab`. Attention is GPIOIC line 163.
 
 ## 8. Workarounds currently in force (each is a substitution for hardware we
 have not modeled yet, not a firmware patch)

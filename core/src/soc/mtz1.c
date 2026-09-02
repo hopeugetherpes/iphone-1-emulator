@@ -375,9 +375,9 @@ bool s5l_mtz1_set_contacts(s5l_mtz1_t *d, const s5l_mt_contact_t *c,
     if (d->pending_len) return false;
     memcpy(first, c, n * sizeof first[0]);
     for (unsigned i = 0; i < n; i++) first[i].phase = MTZ2_PHASE_MAKE_TOUCH;
-    len = s5l_mt_frame_encode(&d->geom, first, n,
-                              (uint8_t)(d->frame_seq + 1u),
-                              d->frame_ms, d->pending);
+    len = s5l_mt_frame_encode_ce(&d->geom, first, n,
+                                 (uint8_t)(d->frame_seq + 1u),
+                                 d->frame_ms, d->pending);
     if (!len) return false;
     memcpy(d->held, first, n * sizeof d->held[0]);
     d->held_n = (uint8_t)n;
@@ -403,10 +403,10 @@ static bool queue_held_frame(s5l_mtz1_t *d, uint8_t phase,
         frame[i].phase = phase;
         if (clear_pressure) frame[i].pressure = 0u;
     }
-    len = s5l_mt_frame_encode(&d->geom, frame, d->held_n,
-                              (uint8_t)(d->frame_seq + 1u),
-                              d->frame_ms,
-                              d->pending);
+    len = s5l_mt_frame_encode_ce(&d->geom, frame, d->held_n,
+                                 (uint8_t)(d->frame_seq + 1u),
+                                 d->frame_ms,
+                                 d->pending);
     if (!len) return false;
     memcpy(d->last_contacts, frame, d->held_n * sizeof d->last_contacts[0]);
     d->last_n = d->held_n;

@@ -96,3 +96,40 @@ unsigned s5l_mt_frame_encode(const s5l_mt_geom_t *g,
     }
     return len;
 }
+
+unsigned s5l_mt_frame_encode_ce(const s5l_mt_geom_t *g,
+                                const s5l_mt_contact_t *c, unsigned n,
+                                uint8_t seq, uint32_t ms, uint8_t *out) {
+    if (!g || !out || !c || n == 0u || n > MTZ2_CONTACT_MAX) return 0u;
+    uint32_t scale_x = g->surface_width / S5L_MT_PANEL_W;
+    unsigned len = MTZ1_FRAME_HEADER + n * MTZ2_CONTACT_STRIDE;
+    if (len > MTZ2_PAYLOAD_LIMIT) return 0u;
+    memset(out, 0, MTZ2_PAYLOAD_LIMIT);
+    out[0] = MTZ1_FRAME_TYPE;
+    out[1] = seq;
+    out[3] = (uint8_t)n;
+    put32(out + 6, ms);
+    out[10] = MTZ1_FRAME_HEADER;
+    for (unsigned i = 0; i < n; i++) {
+        uint8_t *r = out + MTZ1_FRAME_HEADER + i * MTZ2_CONTACT_STRIDE;
+        if (!c[i].id || c[i].id > MTZ2_CONTACT_MAX ||
+            c[i].phase > MTZ2_PHASE_OUT_OF_RANGE ||
+            c[i].x >= S5L_MT_PANEL_W || c[i].y >= S5L_MT_PANEL_H)
+            return 0u;
+        int32_t sx = to_surface(c[i].x, S5L_MT_PANEL_W, -75,
+                                axis_max(g->columns, 5600u, 11u), false);
+        int32_t sy = to_surface(c[i].y, S5L_MT_PANEL_H, -75,
+                                axis_max(g->rows, 3600u, 7u), true);
+        r[0] = c[i].id;
+        r[1] = c[i].phase;
+        r[2] = c[i].id;
+        r[3] = 1u;
+        put16(r + 4, (uint16_t)sx);
+        put16(r + 6, (uint16_t)sy);
+        put16(r + 0x10u, c[i].pressure);
+        put16(r + 0x14u, c[i].pressure);
+        put16(r + 0x1cu, (uint16_t)(c[i].major * scale_x));
+        put16(r + 0x1eu, (uint16_t)(c[i].minor * scale_x));
+    }
+    return len;
+}
