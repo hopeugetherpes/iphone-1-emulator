@@ -3313,11 +3313,9 @@ arm_status_t arm_step(arm_cpu_t *c) {
          * encoding left here is unsupported/reserved, so trap rather than
          * corrupting architectural state. */
         st = ARM_UNDEFINED;
-    } else if (insn == 0xe320f003u) {                     /* ARMv7 WFI */
-        /* Keep the architectural WFI encoding accepted alongside the
-         * ARM1176 MCR form used by iPhone OS. */
-        if (!cpu_is_priv(c)) st = ARM_UNDEFINED;
-        else if (c->bus && c->bus->wait_for_interrupt)
+    } else if (insn == 0xe320f003u) {                 /* ARMv6K WFI hint */
+        /* This hint is a NOP in User mode; only privileged code waits. */
+        if (cpu_is_priv(c) && c->bus && c->bus->wait_for_interrupt)
             (void)c->bus->wait_for_interrupt(c->bus->ctx);
     } else if ((insn & 0x0f000010u) == 0x0e000010u) {     /* MCR / MRC (CP15) */
         st = exec_coprocessor(c, pc, insn);

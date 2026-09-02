@@ -215,14 +215,15 @@ time for 12G instructions.
 ### Interpreter speed and cycles per instruction
 
 The first measured interpreter optimization keeps the existing guest-visible
-timing contract while reducing host overhead. The 10.19G-instruction
-home-snapshot benchmark (`--no-fb`) measured:
+timing contract while reducing host overhead. The home-snapshot benchmark
+(`--no-fb`) executes 400M instructions after restoring the snapshot at
+instruction 9.79G. The measured snapshot-load offset was 1.204637289 s:
 
-| build | best of two runs | instruction rate |
-| --- | ---: | ---: |
-| baseline | 12.509590342 s | 814.6 M instructions/s |
-| native `-O3` + IPO | 11.623522044 s | 876.7 M instructions/s |
-| privileged tick batching | 10.812390565 s | 942.4 M instructions/s |
+| build | executed instructions | load offset | net seconds | M instructions/s | gain |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| baseline | 400M | 1.204637289 s | 11.304953053 s | 35.383 | 0% |
+| native `-O3` + IPO | 400M | 1.204637289 s | 10.418884755 s | 38.392 | 8.50% |
+| privileged tick batching | 400M | 1.204637289 s | 9.607753276 s | 41.633 | 17.66% |
 
 The baseline `perf` profile's top ten symbols were:
 `arm_step` (21.27%), `thumb_step` (17.79%), `s5l8900_run` (10.96%),
@@ -482,9 +483,10 @@ files and firmware images belong outside this repository.
 
 1. Input: Home/hold buttons through the M68 buttons GPIOs (dismiss the Repair
    alert, wake the display), and Z1 multitouch scripted events.
-2. Speed: native interpreter batching and `-O3` + IPO now improve the measured
-   host rate; an interpreter fast path or a JIT for the boot-to-home-screen
-   path may provide further gains before interactive use.
+2. Speed: native execution now measures ~41.6 M instructions/s, or roughly
+   1/10 real time at the 412 MHz model clock; an interpreter fast path or a JIT
+   for the boot-to-home-screen path may provide further gains before
+   interactive use.
 3. Model USB OTG PHY registration ordering -> remove workaround 1; model NAND
    partitions -> remove workaround 3.
 4. Then: application launching, Settings, MobileSafari, stability; only after
