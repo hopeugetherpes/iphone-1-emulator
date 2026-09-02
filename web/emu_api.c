@@ -55,9 +55,8 @@ int emu_init(const uint8_t *kernel, size_t kernel_size,
     release_machine();
     serial_read_pos = serial_write_pos = 0u;
     last_status = ARM_OK;
-    if (!kernel || !kernel_size || !devicetree || !devicetree_size ||
-        !rootfs || !rootfs_size) {
-        set_error("kernel, devicetree, and rootfs are required");
+    if (!kernel || !kernel_size || !devicetree || !devicetree_size) {
+        set_error("kernel and devicetree are required");
         return -1;
     }
     board = s5l_board_find("m68");
@@ -163,16 +162,18 @@ int emu_touch(int down, unsigned x, unsigned y) {
     s5l_mt_contact_t contact;
     if (!machine_ready)
         return -1;
-    if (!down)
+    if (down == 0)
         return s5l8900_set_touch(&machine, NULL, 0u) ? 0 : -2;
+    if (down != 1 && down != 2)
+        return -2;
     memset(&contact, 0, sizeof contact);
     contact.id = 1u;
-    contact.phase = MTZ2_PHASE_MAKE_TOUCH;
+    contact.phase = down == 1 ? MTZ2_PHASE_MAKE_TOUCH : MTZ2_PHASE_TOUCHING;
     contact.x = (uint16_t)x;
     contact.y = (uint16_t)y;
     contact.pressure = 255u;
-    contact.major = 10u;
-    contact.minor = 10u;
+    contact.major = 8u;
+    contact.minor = 8u;
     return s5l8900_set_touch(&machine, &contact, 1u) ? 0 : -2;
 }
 

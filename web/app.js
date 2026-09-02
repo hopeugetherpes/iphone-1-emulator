@@ -20,12 +20,19 @@
   let startedAt;
   let totalSteps = 0;
   let pointerDown = false;
+  let downloadReceived = 0;
+  let downloadTotal = 0;
 
   const setStatus = text => { status.textContent = text; };
   const fail = (message, error) => {
     setStatus(`${message}${error ? `\n${error}` : ""}`);
     console.error(message, error || "");
   };
+
+  function downloadStatus(label) {
+    const total = downloadTotal ? ` / ${downloadTotal.toLocaleString()} bytes` : "";
+    setStatus(`Downloading ${label}: ${downloadReceived.toLocaleString()} bytes${total}`);
+  }
 
   async function bytes(parts, label) {
     if (!parts) return null;
@@ -35,14 +42,51 @@
       for (let i = 0; i < responses.length; i++) {
         if (!responses[i].ok)
           throw new Error(`${label}: ${names[i]} returned HTTP ${responses[i].status}`);
+        const length = Number(responses[i].headers.get("Content-Length"));
+        if (Number.isFinite(length)) downloadTotal += length;
       }
-      const chunks = await Promise.all(responses.map(response => response.arrayBuffer()));
-      const total = chunks.reduce((n, chunk) => n + chunk.byteLength, 0);
+      const chunks = [];
+      for (const response of responses) {
+        if (!response.body) {
+          const chunk = new Uint8Array(await response.arrayBuffer());
+          chunks.push(chunk);
+          downloadReceived += chunk.length;
+          downloadStatus(label);
+          continue;
+        }
+        const reader = response.body.getReader();
+        const received = [];
+        for (;;) {
+          const part = await reader.read();
+          if (part.done) break;
+          received.push(part.value);
+          downloadReceived += part.value.length;
+          downloadStatus(label);
+        }
+        chunks.push(received);
+      }
+      const total = chunks.reduce((n, chunk) =>
+        n + (Array.isArray(chunk) ? chunk.reduce((m, part) => m + part.length, 0) : chunk.length), 0);
       const output = new Uint8Array(total);
       let offset = 0;
       for (const chunk of chunks) {
-        output.set(new Uint8Array(chunk), offset);
-        offset += chunk.byteLength;
+        if (Array.isArray(chunk)) {
+          for (const part of chunk) {
+            output.set(part, offset);
+            offset += part.length;
+          }
+        } else {
+          output.set(chunk, offset);
+          offset += chunk.length;
+        }
+      }
+      const first = names[0];
+      if (first.endsWith(".gz") || /\.gz\.part\d+$/.test(first)) {
+        if (typeof DecompressionStream === "undefined")
+          throw new Error("gzip assets require browser DecompressionStream support");
+        const stream = new Blob([output]).stream().pipeThrough(
+          new DecompressionStream("gzip"));
+        return new Uint8Array(await new Response(stream).arrayBuffer());
       }
       return output;
     } catch (error) {
@@ -90,7 +134,7 @@
   canvas.addEventListener("pointermove", event => {
     if (!run || !pointerDown) return;
     const p = point(event);
-    module.ccall("emu_touch", "number", ["number", "number", "number"], [1, p.x, p.y]);
+    module.ccall("emu_touch", "number", ["number", "number", "number"], [2, p.x, p.y]);
     event.preventDefault();
   });
   canvas.addEventListener("pointerup", event => {
@@ -154,20 +198,26 @@
       if (!manifestResponse.ok)
         throw new Error(`manifest.json returned HTTP ${manifestResponse.status}`);
       const manifest = await manifestResponse.json();
-      setStatus("Loading firmware parts…");
+      const hasSnapshot = Array.isArray(manifest.snapshot) && manifest.snapshot.length > 0;
+      if (!hasSnapshot && (!manifest.rootfs ||
+                          (Array.isArray(manifest.rootfs) && !manifest.rootfs.length)))
+        throw new Error("manifest has neither a snapshot nor a rootfs for cold boot");
+      if (!hasSnapshot)
+        setStatus("Cold boot selected; loading rootfs (this takes several minutes)…");
       const [kernel, devicetree, rootfs, snapshot] = await Promise.all([
         bytes(manifest.kernel, "kernel"),
         bytes(manifest.devicetree, "device tree"),
-        bytes(manifest.rootfs, "rootfs"),
-        bytes(manifest.snapshot, "snapshot")
+        hasSnapshot ? Promise.resolve(null) : bytes(manifest.rootfs, "rootfs"),
+        hasSnapshot ? bytes(manifest.snapshot, "snapshot") : Promise.resolve(null)
       ]);
       setStatus("Initializing the M68 machine…");
       module = await createEmu({locateFile: path => `dist/${path}`});
-      const k = putBytes(kernel), d = putBytes(devicetree), r = putBytes(rootfs);
+      const k = putBytes(kernel), d = putBytes(devicetree);
+      const r = rootfs ? putBytes(rootfs) : [0, 0];
       const init = module.ccall("emu_init", "number",
         ["number", "number", "number", "number", "number", "number", "number"],
         [k[0], k[1], d[0], d[1], r[0], r[1], 256]);
-      module._free(k[0]); module._free(d[0]); module._free(r[0]);
+      module._free(k[0]); module._free(d[0]); if (r[0]) module._free(r[0]);
       if (init < 0) throw new Error(module.ccall("emu_error", "string", [], []));
       if (snapshot) {
         setStatus("Loading snapshot…");

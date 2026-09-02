@@ -10,4 +10,4 @@ build/
 __pycache__/
 /web/build/
 /web/dist/
-/web/firmware/
+!/web/firmware/**

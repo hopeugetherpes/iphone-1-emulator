@@ -1,14 +1,12 @@
 {
-  "kernel": "firmware/kernel.macho",
-  "devicetree": "firmware/devicetree.bin",
+  "kernel": "firmware/kernel_1A543a.macho",
+  "devicetree": "firmware/devicetree_m68ap.bin",
   "rootfs": [
-    "firmware/rootfs.part0",
-    "firmware/rootfs.part1",
-    "firmware/rootfs.part2"
+    "firmware/rootfs_1A543a_act.img.gz.part0",
+    "firmware/rootfs_1A543a_act.img.gz.part1"
   ],
   "snapshot": [
-    "firmware/home.snap.part0",
-    "firmware/home.snap.part1",
-    "firmware/home.snap.part2"
+    "firmware/home_1A543a.snap.gz.part0",
+    "firmware/home_1A543a.snap.gz.part1"
   ]
 }

@@ -61,5 +61,19 @@ For long idle experiments, `rootfs_work.py --no-autolock` seeds
 preferences. This is a user-preference change in the work image, not an Apple
 binary patch.
 
-Keep firmware outside the tree (the `.gitignore` also excludes the usual
-extensions).
+## Browser build
+
+The WebAssembly build and plain JavaScript frontend use the Emscripten SDK:
+
+```sh
+source ~/emsdk/emsdk_env.sh
+emcmake cmake -S . -B web/build -DIPHONE1_WEB=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build web/build
+python3 -m http.server 8080 --directory web
+```
+
+The `web/firmware/` directory contains the 1A543a kernel, device tree, and
+compressed activated rootfs and home-screen snapshot assets. The manifest uses
+the snapshot by default, avoiding the multi-minute cold boot; remove the
+snapshot entry to load the rootfs and boot from scratch. Open
+`http://127.0.0.1:8080/` after starting the server.
