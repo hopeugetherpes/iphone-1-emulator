@@ -81,28 +81,25 @@ bool s5l_timer_tick(s5l_timer_t *t, uint32_t ticks) {
          * Advance algebraically.  WFI can legitimately move guest time by a
          * complete decrementer interval in one call; iterating once per
          * timebase tick would turn a safe idle fast-forward back into another
-         * busy loop.  The status is a level latch rather than an expiry count,
-         * so the observable state is exactly: whether at least one boundary
-         * was crossed, and the down-counter phase after all elapsed ticks.
+         * busy loop.
          */
         uint32_t value = t->t4_value;
-        uint32_t period = t->t4_count;
 
-        if (value == 0) value = period;       /* reload before the first tick */
+        if (value == 0) value = t->t4_count;  /* reload before the first tick */
         if (value != 0) {
             if (ticks < value) {
                 t->t4_value = value - ticks;
             } else {
-                uint32_t after_first = ticks - value;
+                /*
+                 * One-shot: the kernel re-arms via set_decrementer (count
+                 * buffer + start|update) on every expiry.  Auto-reloading
+                 * here would re-latch the FIQ while the handler is still
+                 * running whenever the handler takes longer than the armed
+                 * interval, and the 10-tick minimum deadline then livelocks.
+                 */
                 t->irqlatch |= TIMER4_IRQ_BITS;
-                if (period == 0) {
-                    /* A non-zero live value with a zero reload can expire
-                     * once, then remains stopped at zero. */
-                    t->t4_value = 0;
-                } else {
-                    uint32_t phase = after_first % period;
-                    t->t4_value = phase ? period - phase : period;
-                }
+                t->t4_value = 0;
+                t->t4_state &= ~TIMER4_STATE_START;
             }
         }
     }

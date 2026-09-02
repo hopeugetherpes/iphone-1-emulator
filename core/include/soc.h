@@ -4435,6 +4435,13 @@ bool s5l8900_init_soc(s5l8900_t *m, uint32_t ram_base, uint32_t ram_size);
 bool s5l8900_init(s5l8900_t *m, uint32_t ram_base, uint32_t ram_size);
 void s5l8900_free(s5l8900_t *m);
 
+/*
+ * Set the average ARM1176 cycles per retired instruction. Guest wall clock
+ * (the 6 MHz timebase) is unchanged; only the instructions per guest second
+ * change. The default is 1.
+ */
+bool s5l8900_set_cycles_per_insn(s5l8900_t *m, unsigned cpi);
+
 /* Same-binary control for callback-free plain-RAM CPU stores. Enabling succeeds
  * only while the machine still owns its canonical, uninterposed write bus.
  * Disabling is always safe and invalidates every derived write pointer. */

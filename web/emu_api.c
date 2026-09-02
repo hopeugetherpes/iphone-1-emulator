@@ -289,6 +289,13 @@ int emu_button(unsigned which, int pressed) {
 }
 
 EMSCRIPTEN_KEEPALIVE
+int emu_set_cpi(unsigned cpi) {
+    if (!machine_ready || !s5l8900_set_cycles_per_insn(&machine, cpi))
+        return -1;
+    return 0;
+}
+
+EMSCRIPTEN_KEEPALIVE
 uint64_t emu_cycles(void) {
     return machine_ready ? machine.cpu.cycles : 0u;
 }

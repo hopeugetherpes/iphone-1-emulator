@@ -273,9 +273,8 @@ static void test_timebase_runs_without_a_timer(void) {
 }
 
 static void test_timer_period_is_exact(void) {
-    /* One interrupt per reload period, at a steady interval. Latching on both
-     * the decrement-to-zero and reload-from-zero paths produced two interrupts
-     * per period at intervals N, 1, N, 1, ... */
+    /* One interrupt per armed interval, at a steady interval when the handler
+     * re-arms the one-shot the way the kernel's set_decrementer does. */
     s5l_timer_t t; s5l_timer_reset(&t);
     s5l_timer_write(&t, TIMER4_COUNTBUF, 4);
     s5l_timer_write(&t, TIMER4_STATE, TIMER4_STATE_START | TIMER4_STATE_UPDATE);
@@ -285,6 +284,9 @@ static void test_timer_period_is_exact(void) {
             if (last && (tick - last) != 4) deltas_ok = 0;
             last = tick; expiries++;
             s5l_timer_write(&t, TIMER_IRQACK, TIMER4_IRQ_BITS);   /* acknowledge */
+            s5l_timer_write(&t, TIMER4_COUNTBUF, 4);
+            s5l_timer_write(&t, TIMER4_STATE,
+                            TIMER4_STATE_START | TIMER4_STATE_UPDATE);
         }
     }
     CHECK(expiries == 5, "expiries=%u expect 5 in 20 ticks with count 4", expiries);
@@ -314,14 +316,11 @@ static void test_timer_ack_mask_matches_the_kernels(void) {
 static void timer_tick_reference(s5l_timer_t *t, uint32_t ticks) {
     t->ticks += ticks;
     if (t->t4_state & TIMER4_STATE_START) {
-        while (ticks--) {
-            if (t->t4_value == 0) {
-                t->t4_value = t->t4_count;
-                if (t->t4_value == 0) break;
-            }
+        if (ticks && t->t4_value == 0) t->t4_value = t->t4_count;
+        while (ticks-- && t->t4_value) {
             if (--t->t4_value == 0) {
                 t->irqlatch |= TIMER4_IRQ_BITS;
-                t->t4_value = t->t4_count;
+                t->t4_state &= ~TIMER4_STATE_START;   /* one-shot */
             }
         }
     }
@@ -347,27 +346,30 @@ static void test_timer_lump_matches_literal_countdown(void) {
                     timer_tick_reference(&slow, ticks);
                     CHECK(fast.ticks == slow.ticks &&
                           fast.t4_value == slow.t4_value &&
-                          fast.irqlatch == slow.irqlatch,
-                          "p=%u v=%u ticks=%u start=%u: fast {%llu,%u,%x} "
-                          "slow {%llu,%u,%x}",
+                          fast.irqlatch == slow.irqlatch &&
+                          fast.t4_state == slow.t4_state,
+                          "p=%u v=%u ticks=%u start=%u: fast {%llu,%u,%x,%x} "
+                          "slow {%llu,%u,%x,%x}",
                           period, value, ticks, started,
                           (unsigned long long)fast.ticks, fast.t4_value,
-                          fast.irqlatch, (unsigned long long)slow.ticks,
-                          slow.t4_value, slow.irqlatch);
+                          fast.irqlatch, fast.t4_state,
+                          (unsigned long long)slow.ticks,
+                          slow.t4_value, slow.irqlatch, slow.t4_state);
                 }
             }
         }
     }
 
-    /* This used to require UINT32_MAX host-loop iterations.  With period 3,
-     * UINT32_MAX is an exact multiple of the period, so the reload phase is 3. */
+    /* This used to require UINT32_MAX host-loop iterations.  A one-shot
+     * decrementer expires once and stops, whatever the overshoot. */
     s5l_timer_t huge;
     s5l_timer_reset(&huge);
     huge.t4_count = huge.t4_value = 3u;
     huge.t4_state = TIMER4_STATE_START;
     CHECK(s5l_timer_tick(&huge, UINT32_MAX),
           "a huge running interval must cross an expiry");
-    CHECK(huge.ticks == UINT32_MAX && huge.t4_value == 3u &&
+    CHECK(huge.ticks == UINT32_MAX && huge.t4_value == 0u &&
+          huge.t4_state == 0u &&
           huge.irqlatch == TIMER4_IRQ_BITS,
           "huge tick left ticks=%llu value=%u latch=%08x",
           (unsigned long long)huge.ticks, huge.t4_value, huge.irqlatch);
@@ -406,8 +408,8 @@ static void test_wfi_fast_forwards_to_the_timer_boundary(void) {
           m.cpu.r[15] == 4u && m.cpu.cycles == 1u,
           "WFI status=%d ran=%u pc=%08x retired=%llu",
           (int)st, ran, m.cpu.r[15], (unsigned long long)m.cpu.cycles);
-    CHECK(m.timer.ticks == 3u && m.timer.t4_value == 3u,
-          "timer stopped at ticks=%llu value=%u, expect exact expiry 3/3",
+    CHECK(m.timer.ticks == 3u && m.timer.t4_value == 0u,
+          "timer stopped at ticks=%llu value=%u, expect exact expiry 3/0",
           (unsigned long long)m.timer.ticks, m.timer.t4_value);
     /* The runner accounts the WFI instruction's ordinary one active tick
      * after the synchronous wait.  At 4:1 that leaves fractional phase 1 and

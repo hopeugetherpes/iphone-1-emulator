@@ -23,7 +23,7 @@ if(IPHONE1_WEB)
         -sMODULARIZE=1
         -sEXPORT_ES6=0
         -sEXPORT_NAME=createEmu
-        "-sEXPORTED_FUNCTIONS=['_emu_init','_emu_error','_emu_load_snapshot','_emu_run','_emu_status','_emu_frame','_emu_touch','_emu_button','_emu_cycles','_emu_serial_read','_malloc','_free']"
+        "-sEXPORTED_FUNCTIONS=['_emu_init','_emu_error','_emu_load_snapshot','_emu_run','_emu_status','_emu_frame','_emu_touch','_emu_button','_emu_set_cpi','_emu_cycles','_emu_serial_read','_malloc','_free']"
         "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap','HEAPU8','HEAPU32']"
     )
     set_target_properties(emu PROPERTIES

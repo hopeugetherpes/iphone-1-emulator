@@ -212,6 +212,19 @@ SpringBoard's main thread then sits in a healthy CFRunLoop (~2k syscalls per
 guest-second, mostly `mach_msg` with CommCenter). The run takes ~5.5 min of host
 time for 12G instructions.
 
+### Cycles per instruction
+
+`--cpi` and the WebAssembly `emu_set_cpi` API model the average ARM1176 cycles
+per retired instruction. They leave the guest wall clock (the 6 MHz timebase)
+unchanged and only change how many instructions fit in a guest second; this is
+a timing-model parameter, not a guest modification. Native defaults to 1 and
+the web frontend defaults to 2. Observed timings are:
+
+* cold boot at CPI 1: home screen at 7.0G steps in 198 s;
+* cold boot at CPI 2: home screen by approximately 3.5G steps;
+* snapshot tap → Settings → Home: 52 s / 29 s / 18 s host time at CPI 1 / 2 /
+  4, with identical screens.
+
 ## 7. Hardware behaviour implemented for this target
 
 * **NOR + CHRP NVRAM.** M68 NOR sits at physical `0x24000000`. xnu-933's
@@ -219,13 +232,16 @@ time for 12G instructions.
   `length < 16` guard, so a blank NVRAM hangs it. `m68.c` programs a valid
   `common` partition (with the CHRP checksum) into both 8 KiB copies, which is
   what a real unit ships with.
-* **Timer/timebase.** OS 1.0 programs timer4 differently from iOS 3. The tick
-  model now reloads from the period register when the value register is zero
-  and computes the post-expiry phase, and the machine converts CPU cycles to
-  timebase ticks with an accumulator (`412 MHz` CPU, `6 MHz` timebase). Before
-  this, the 100 Hz `hertz_tick` fired ~5x in 114M instructions instead of ~27x
-  and `IODelay` wakeups arrived millions of instructions late, which broke
-  driver-registration ordering.
+* **Timer/timebase.** OS 1.0 programs timer4 differently from iOS 3. Timer4 is
+  a one-shot down-counter: expiry latches `TIMER4_IRQ_BITS`, zeroes the value,
+  and clears `START`. The kernel re-arms it by writing `COUNTBUF` followed by
+  `STATE=START|UPDATE`, as `_s5l8900x_set_decrementer` does. Auto-reload was
+  wrong: a slow handler re-latched FIQ, and the 10-tick minimum deadline then
+  livelocked. The machine converts CPU cycles to timebase ticks with an
+  accumulator (`412 MHz` CPU, `6 MHz` timebase). Before this, the 100 Hz
+  `hertz_tick` fired ~5x in 114M instructions instead of ~27x and `IODelay`
+  wakeups arrived millions of instructions late, which broke driver-registration
+  ordering.
 * **MBX.** OS 1.0 writes 0 (as well as 1) to the TA context-reset register and
   polls the status bit; the model now completes for 0 and 1.
 * **ARM exception state.** `MSR CPSR` in exception handlers no longer allows the

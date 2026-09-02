@@ -22,6 +22,8 @@
   let pointerDown = false;
   let downloadReceived = 0;
   let downloadTotal = 0;
+  const queryCpi = Number.parseInt(new URLSearchParams(location.search).get("cpi"), 10);
+  const cpi = Number.isInteger(queryCpi) && queryCpi >= 1 && queryCpi <= 16 ? queryCpi : 2;
 
   const setStatus = text => { status.textContent = text; };
   const fail = (message, error) => {
@@ -200,7 +202,7 @@
       const text = new TextDecoder().decode(serial.subarray(0, n));
       suffix = `\nUART0: ${text.slice(-180)}`;
     }
-    setStatus(`Running · ${speed} instructions/s · cycle ${cyclesCall()} · ${display}${suffix}`);
+    setStatus(`Running · ${speed} instructions/s · cpi ${cpi} · cycle ${cyclesCall()} · ${display}${suffix}`);
     requestAnimationFrame(animationFrame);
   }
 
@@ -238,6 +240,8 @@
         module._free(s[0]);
         if (loaded < 0) throw new Error(module.ccall("emu_error", "string", [], []));
       }
+      const cpiResult = module.ccall("emu_set_cpi", "number", ["number"], [cpi]);
+      if (cpiResult < 0) throw new Error(`invalid cpi ${cpi}`);
       run = module.cwrap("emu_run", "number", ["number"]);
       frameCall = module.cwrap("emu_frame", "number", ["number", "number", "number"]);
       cyclesCall = module.cwrap("emu_cycles", "number", []);

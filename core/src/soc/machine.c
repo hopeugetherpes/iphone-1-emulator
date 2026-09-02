@@ -1414,6 +1414,13 @@ void s5l8900_free(s5l8900_t *m) {
     s5l_nor_free(&m->nor);
 }
 
+bool s5l8900_set_cycles_per_insn(s5l8900_t *m, unsigned cpi) {
+    if (!m || cpi < 1u || cpi > 16u) return false;
+    m->cpu_hz = S5L8900_CPU_HZ / cpi;
+    m->tb_accum %= m->cpu_hz;
+    return true;
+}
+
 void s5l8900_load(s5l8900_t *m, uint32_t addr, const void *data, size_t len) {
     if (!m || !data || !len) return;
     /* Check before narrowing: a >4 GiB length must not truncate into range. */

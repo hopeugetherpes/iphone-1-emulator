@@ -199,6 +199,7 @@ static void dump_va(s5l8900_t *m, uint32_t va, unsigned words) {
 }
 static void usage(void) {
     puts("iphone1 --board m68|n82 --kernel PATH --devicetree PATH [options]\n"
+         "  --cpi N           cycles per retired instruction, 1..16, default 1\n"
          "  --dump-ram FILE  write the guest RAM image when the run ends");
 }
 
@@ -237,7 +238,7 @@ static int input_compare(const void *a, const void *b) {
 
 int main(int argc,char **argv) {
     const char *board_name=NULL,*kp=NULL,*dp=NULL,*rp=NULL,*cmd=NULL,*serial=NULL,*shot=NULL;
-    uint64_t steps=200000000ull; unsigned ram_mb=0,vd=0; bool fb=true,debug=false,trace=false;
+    uint64_t steps=200000000ull; unsigned ram_mb=0,vd=0,cpi=1; bool fb=true,debug=false,trace=false;
     uint32_t break_pc=0; uint64_t trace_from=UINT64_MAX; unsigned trace_last=256;
     uint32_t dump[8]; unsigned dump_n=0;
     const char *unmatch[16]; unsigned unmatch_n=0; uint64_t shot_every=0; uint32_t mmio_watch=0;
@@ -250,6 +251,7 @@ int main(int argc,char **argv) {
         else if (!strcmp(argv[i],"--devicetree")&&i+1<argc) dp=argv[++i];
         else if (!strcmp(argv[i],"--ramdisk")&&i+1<argc) rp=argv[++i];
         else if (!strcmp(argv[i],"--ram-mb")&&i+1<argc) ram_mb=(unsigned)strtoul(argv[++i],NULL,0);
+        else if (!strcmp(argv[i],"--cpi")&&i+1<argc) cpi=(unsigned)strtoul(argv[++i],NULL,0);
         else if (!strcmp(argv[i],"--cmdline")&&i+1<argc) cmd=argv[++i];
         else if (!strcmp(argv[i],"--steps")&&i+1<argc) steps=strtoull(argv[++i],NULL,0);
         else if (!strcmp(argv[i],"--no-fb")) fb=false;
@@ -383,6 +385,11 @@ int main(int argc,char **argv) {
         }
         fprintf(stderr, "loaded snapshot %s at step %llu\n", load_path,
                 (unsigned long long)m.cpu.cycles);
+    }
+    if (!s5l8900_set_cycles_per_insn(&m, cpi)) {
+        fprintf(stderr, "invalid --cpi %u (expected 1..16)\n", cpi);
+        s5l8900_free(&m); free(k.p); free(d.p); free(rd.p);
+        return 2;
     }
     qsort(events, event_n, sizeof events[0], input_compare);
     tap_t t={serial?fopen(serial,"wb"):NULL,&m,true}; s5l8900_set_uart0_host(&m,tap,&t);
