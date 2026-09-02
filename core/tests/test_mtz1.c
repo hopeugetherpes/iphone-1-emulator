@@ -75,17 +75,22 @@ int main(void) {
     CHECK(d.operating_mode == 1u && rx[5] == sr[5] && rx[6] == sr[6],
           "set operating mode");
 
-    uint8_t lr[5] = { 0x64u, 0u, 0u, 0u, 0u };
+    uint8_t lr[8] = { 0x46u, 0x46u, 0x46u, 0x46u,
+                      0x46u, 0x46u, 0x46u, 0x46u };
     txn(&s, lr, rx, sizeof lr);
-    CHECK(rx[1] == 0u && rx[2] == 0u, "idle length");
+    CHECK(rx[0] == 0xaau && rx[1] == 0u && rx[2] == 0u &&
+          rx[3] == 0u && rx[4] == 0u, "idle length");
 
     s5l_mt_contact_t c = { 1u, MTZ2_PHASE_MAKE_TOUCH, 48u, 60u,
                            255u, 8u, 8u };
     CHECK(s5l_mtz1_set_contacts(&d, &c, 1u), "queue contact");
     txn(&s, lr, rx, sizeof lr);
     unsigned l = rx[1] << 8 | rx[2];
-    CHECK(l == 44u, "contact length");
-    uint8_t data[45] = { 0x68u };
+    uint16_t lc = (uint16_t)(rx[1] + rx[2]);
+    CHECK(l == 44u && rx[3] == (uint8_t)(lc >> 8) &&
+          rx[4] == (uint8_t)lc && d.pending_len != 0u && d.atn,
+          "contact length/checksum/pending");
+    uint8_t data[45] = { 0x47u };
     txn(&s, data, rx, sizeof data);
     uint16_t dc = 0u;
     for (unsigned i = 1; i < 43u; i++) dc = (uint16_t)(dc + rx[i]);

@@ -86,15 +86,23 @@ static uint8_t firmware_byte(s5l_mtz1_t *d, unsigned pos,
             return (uint8_t)ck;
         }
         return 0u;
+    case 0x46u:
     case 0x64u:
     case 0x65u: {
         unsigned l = d->pending_len ? d->pending_len + 2u : 0u;
         if (pos == 1u) return (uint8_t)(l >> 8);
         if (pos == 2u) return (uint8_t)l;
-        if (pos == 3u) return (uint8_t)((l >> 8) + (uint8_t)l);
-        if (pos == 4u) return (uint8_t)(((l >> 8) + (uint8_t)l) >> 8);
+        if (pos == 3u) {
+            uint16_t ck = (uint16_t)((l >> 8) + (uint8_t)l);
+            return (uint8_t)(ck >> 8);
+        }
+        if (pos == 4u) {
+            uint16_t ck = (uint16_t)((l >> 8) + (uint8_t)l);
+            return (uint8_t)ck;
+        }
         return 0u;
     }
+    case 0x47u:
     default: {
         unsigned l = d->pending_len + 2u;
         if (d->pending_len && pos >= 1u && pos < d->pending_len + 1u)
@@ -122,7 +130,7 @@ static void finish_transaction(s5l_mtz1_t *d) {
     if (d->firmware) {
         if (op == 0x92u && d->rx_len >= 5u && d->rx[1] == 0xabu)
             d->operating_mode = d->rx[4];
-        if (op != 0x64u && op != 0x65u) {
+        if (op != 0x46u && op != 0x64u && op != 0x65u) {
             if (d->pending_len) {
                 d->pending_len = 0u;
                 d->frames_read++;
