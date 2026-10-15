@@ -165,11 +165,9 @@ Offline mode needs service-worker support and HTTPS or localhost.
 If a cached firmware file fails its digest check, the browser tries a fresh download.
 Offline package updates wait until existing phone tabs close.
 
-The public site uses PostHog for visit and emulator lifecycle events.
-The configuration disables session recording and automatic UI capture.
-Event calls exclude guest text, pixels, touch coordinates, logs, and backup contents.
-Local and preview hosts do not send these production events.
-See [the analytics configuration](web/analytics.js).
+The browser does not load analytics SDKs or send visit, interaction, or lifecycle events.
+Saved phone data stays in this browser unless you export a backup.
+Firmware downloads still use `https://iphone.files.garden/` as described above.
 
 ## Firmware and native diagnostics
 

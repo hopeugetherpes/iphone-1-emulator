@@ -1,4 +1,3 @@
-import {track} from './analytics.js';
 import {acquireProfile, readCheckpoint, writeOwnedCheckpoint, clearCheckpoints, checkpointBytes, PROFILE_VERSION} from './storage.js';
 
 const $ = id => document.getElementById(id);
@@ -50,7 +49,6 @@ function controls() {
   canvas.style.pointerEvents = ready && !paused ? '' : 'none';
 }
 function fail(error) {
-  track('emulator failed', {error_type:error?.name || 'Error', startup:!ready});
   ready = false;
   canvas.dataset.ready = 'false'; document.body.dataset.ready = 'false';
   $('boot-loader').hidden = false;
@@ -81,7 +79,6 @@ function releaseInputs() {
   return ready ? call('release') : Promise.resolve();
 }
 async function start(recovery = null) {
-  track('emulator started', {recovery:Boolean(recovery)});
   ready = false; paused = false;
   $('boot-loader').hidden = false;
   $('boot-loader').dataset.state = 'loading';
@@ -127,7 +124,6 @@ async function start(recovery = null) {
       silent = Boolean(message.silent);
       document.querySelector('[data-toggle]').setAttribute('aria-pressed', String(silent));
       controls(); showRunning();
-      track('emulator ready', {startup_ms:Math.round(performance.now() - startTime), restored:Boolean(savedRecord)});
       window.dispatchEvent(new CustomEvent('iphone-ready', {detail:{startupMs:performance.now() - startTime}}));
     } else if (message.type === 'reply') {
       const req = pending.get(message.id); pending.delete(message.id);
@@ -188,10 +184,6 @@ canvas.addEventListener('pointerdown', event => {
   if (!id) return;
   contacts.set(event.pointerId, {id, ...point(event)});
   canvas.setPointerCapture(event.pointerId); sendContacts(); event.preventDefault();
-  if (!canvas.dataset.analyticsInteracted) {
-    canvas.dataset.analyticsInteracted = 'true';
-    track('emulator interacted', {input_type:event.pointerType});
-  }
 });
 canvas.addEventListener('pointermove', event => {
   const contact = contacts.get(event.pointerId);
@@ -205,7 +197,6 @@ function lift(event) {
 for (const event of ['pointerup','pointercancel','lostpointercapture']) canvas.addEventListener(event, lift);
 function setButton(which, pressed) {
   if (!ready || paused) return;
-  if (pressed || which === 4) track('phone control used', {control:['sleep_wake','home','volume_up','volume_down','silent'][which], ...(which === 4 ? {enabled:pressed} : {})});
   lastInput = performance.now();
   document.querySelector(`[data-button="${which}"]`)?.classList.toggle('pressed', pressed);
   call('button', {which, pressed}).catch(inputError);
@@ -265,12 +256,10 @@ async function save(manual = false) {
     const buffer = await capture();
     phase = 'browser storage write';
     lastSave = await writeOwnedCheckpoint(buffer);
-    track('phone saved', {manual});
     phase = 'browser storage read';
     savedRecord = await readCheckpoint(); showRunning();
     navigator.storage?.persist?.().catch(() => {});
   } catch (error) {
-    track('phone save failed', {phase, manual, error_type:error?.name || 'Error'});
     console.error(`Save failed during ${phase}`, error?.name, error?.message, error);
     setStatus(`Save failed: ${describeError(error)}. Export a backup to keep this session.`);
   }
@@ -342,9 +331,8 @@ $('offline').addEventListener('click', async () => {
         if (candidate.state === 'redundant') reject(new Error('Offline installation failed'));
       });
     });
-    track('offline enabled');
     setStatus('Your phone is available offline. Save to keep your latest changes.');
-  } catch (error) { track('offline setup failed', {error_type:error?.name || 'Error'}); setStatus(`Offline setup failed: ${describeError(error)}. Try again when connected.`); }
+  } catch (error) { setStatus(`Offline setup failed: ${describeError(error)}. Try again when connected.`); }
   finally { preparingOffline = false; controls(); }
 });
 $('export').addEventListener('click', async () => {
@@ -353,9 +341,8 @@ $('export').addEventListener('click', async () => {
     const blob = ready ? new Blob([await capture()]) : savedRecord.data;
     const extension = !ready && savedRecord.encoding === 'gzip' ? '.snap.gz' : '.snap';
     download(blob, `iphone-${new Date().toISOString().slice(0,10)}${extension}`);
-    track('backup exported');
     setStatus('Backup downloaded. Keep it somewhere safe.');
-  } catch (error) { track('backup export failed', {error_type:error?.name || 'Error'}); setStatus(`Export failed: ${error.message}`); }
+  } catch (error) { setStatus(`Export failed: ${error.message}`); }
   finally { saving = false; controls(); }
 });
 $('pause').addEventListener('click', async () => {
@@ -363,7 +350,6 @@ $('pause').addEventListener('click', async () => {
     await releaseInputs(); paused = !paused;
     if (paused) { audio?.suspend().catch(() => {}); audioTime = 0; } else unlockAudio();
     await call('pause', {value:paused}); controls();
-    track(paused ? 'emulator paused' : 'emulator resumed');
     paused ? setStatus('Paused. Your iPhone will wait here.') : showRunning();
   } catch (error) { fail(error); }
 });
@@ -391,24 +377,22 @@ $('import').addEventListener('change', async event => {
     silent = Boolean(restored.silent);
     document.querySelector('[data-toggle]').setAttribute('aria-pressed', String(silent));
     lastSave = await writeOwnedCheckpoint(await capture()); savedRecord = await readCheckpoint();
-    track('backup imported');
     setStatus('Your backup is restored.');
-  } catch (error) { track('backup import failed', {error_type:error?.name || 'Error'}); setStatus(`Import failed: ${describeError(error)}. Your previous save is retained.`); }
+  } catch (error) { setStatus(`Import failed: ${describeError(error)}. Your previous save is retained.`); }
   finally { saving = false; controls(); }
 });
 $('reset').addEventListener('click', async () => {
   if (!profileOwned || !confirm('Reset this phone and delete its browser saves? Export first to keep a backup.')) return;
   saving = true; controls();
-  try { await clearCheckpoints(); track('phone reset'); savedRecord = null; lastSave = 0; await start(); }
+  try { await clearCheckpoints(); savedRecord = null; lastSave = 0; await start(); }
   catch (error) { fail(error); }
   finally { saving = false; controls(); }
 });
-$('retry').addEventListener('click', () => { track('emulator retry requested'); start().catch(fail); });
+$('retry').addEventListener('click', () => { start().catch(fail); });
 $('recover').addEventListener('click', async () => {
   try {
     const previous = await readCheckpoint('previous');
     if (!previous) throw new Error('There is no earlier saved checkpoint. Export the current save before resetting.');
-    track('previous save restored');
     await start(previous);
   } catch (error) { fail(error); }
 });
